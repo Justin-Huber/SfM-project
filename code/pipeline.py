@@ -1,7 +1,9 @@
 import os
 import pickle
+import matplotlib.pyplot as plt
 
-from feature_extraction import load_images, populate_keypoints_and_descriptors
+from feature_extraction import load_images, populate_keypoints_and_descriptors,\
+                                unpickle_keypoints
 
 
 class Pipeline():
@@ -27,16 +29,16 @@ class Pipeline():
         if not os.path.isdir(self.output_dir):
             raise RuntimeError("Invalid output directory")
 
-        p_dir = os.path.join(self.output_dir, 'pipeline')
-        fe_dir = os.path.join(p_dir, 'feature_extraction')
-        fm_dir = os.path.join(p_dir, 'feature_matching')
+        self.pipeline_dir = os.path.join(self.output_dir, 'pipeline')
+        self.feature_extraction_dir = os.path.join(self.pipeline_dir, 'feature_extraction')
+        self.feature_matching_dir = os.path.join(self.pipeline_dir, 'feature_matching')
 
-        if not os.path.exists(p_dir):
-            os.mkdir(p_dir)
-        if not os.path.exists(fe_dir):
-            os.mkdir(fe_dir)
-        if not os.path.exists(fm_dir):
-            os.mkdir(fm_dir)
+        if not os.path.exists(self.pipeline_dir):
+            os.mkdir(self.pipeline_dir)
+        if not os.path.exists(self.feature_extraction_dir):
+            os.mkdir(self.feature_extraction_dir)
+        if not os.path.exists(self.feature_matching_dir):
+            os.mkdir(self.feature_matching_dir)
 
     def run(self, stage=0):
         if stage == 0:
@@ -49,10 +51,34 @@ class Pipeline():
             self._reconstruct3d()
         raise NotImplementedError
 
+    def _load_images(self):
+        pickled_images = os.path.join(self.feature_extraction_dir, 'images.pkl')
+        if os.path.exists(pickled_images):
+            with open(pickled_images, 'rb') as f:
+                images = pickle.load(f)
+        else:
+            images = load_images(self.images_dir)
+            with open(pickled_images, 'wb') as f:
+                pickle.dump(images, f)
+
+        return images
+
     def _extract_features(self):
-        images = load_images(self.images_dir)
-        self.features_and_descriptors = populate_keypoints_and_descriptors(images)
-        raise NotImplementedError
+        images = self._load_images()  # TODO move to the else?
+        pickled_keypoints = os.path.join(self.feature_extraction_dir, 'keypoints.pkl')
+        if os.path.exists(pickled_keypoints):
+            with open(pickled_keypoints, 'rb') as f:
+                self.features_and_descriptors = pickle.load(f)
+        else:
+            self.features_and_descriptors = populate_keypoints_and_descriptors(images)
+            with open(pickled_keypoints, 'wb') as f:
+                pickle.dump(self.features_and_descriptors, f)
+
+        # deserialize the keypoints
+        self.features_and_descriptors = [unpickle_keypoints(kps_and_des) for kps_and_des in self.features_and_descriptors]
+
+        # TODO add debug option to visualize
+        plt.imshow(images[85]), plt.show()
 
     def _match_features(self):
         raise NotImplementedError
