@@ -1,9 +1,10 @@
 import os
 import pickle
 import matplotlib.pyplot as plt
+import cv2
 
 from feature_extraction import load_images, populate_keypoints_and_descriptors,\
-                                unpickle_keypoints
+                                deserialize_keypoints
 
 
 class Pipeline:
@@ -44,7 +45,7 @@ class Pipeline:
         if stage == 0:
             self._extract_features()  # extract features using SIFT
         if stage < 1:
-            self._match_features()  # match features using ANN (TODO decide)
+            self._match_features()  # match features using FLANN (TODO decide)
         if stage < 2:
             self._init_reconstruction()
         if stage < 3:
@@ -68,19 +69,48 @@ class Pipeline:
         pickled_keypoints = os.path.join(self.feature_extraction_dir, 'keypoints.pkl')
         if os.path.exists(pickled_keypoints):
             with open(pickled_keypoints, 'rb') as f:
-                self.features_and_descriptors = pickle.load(f)
+                self.keypoints_and_descriptors = pickle.load(f)
         else:
-            self.features_and_descriptors = populate_keypoints_and_descriptors(images)
+            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(images)
             with open(pickled_keypoints, 'wb') as f:
-                pickle.dump(self.features_and_descriptors, f)
+                pickle.dump(self.keypoints_and_descriptors, f)
 
         # deserialize the keypoints
-        self.features_and_descriptors = [unpickle_keypoints(kps_and_des) for kps_and_des in self.features_and_descriptors]
+        self.keypoints_and_descriptors = [deserialize_keypoints(kps_and_des) for kps_and_des in self.keypoints_and_descriptors]
 
         # TODO add debug option to visualize
-        plt.imshow(images[85]), plt.show()
+        img = images[0]
+        vis_keypoints = self.keypoints_and_descriptors[0][0]
+        vis_img = cv2.drawKeypoints(img, vis_keypoints, img, flags=4)  # draws rich keypoints
+        plt.imshow(vis_img), plt.show()
 
     def _match_features(self):
+        raise NotImplementedError  # TODO below implementation not done yet
+        # FLANN parameters
+        FLANN_INDEX_KDTREE = 0
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)  # TODO set params differently?
+        search_params = dict(checks=50)  # or pass empty dictionary
+
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+
+        matches = flann.knnMatch(des1, des2, k=2)
+
+        # Need to draw only good matches, so create a mask
+        matchesMask = [[0, 0] for i in range(len(matches))]
+
+        # ratio test as per Lowe's paper
+        for i, (m, n) in enumerate(matches):
+            if m.distance < 0.7 * n.distance:
+                matchesMask[i] = [1, 0]
+
+        draw_params = dict(matchColor=(0, 255, 0),
+                           singlePointColor=(255, 0, 0),
+                           matchesMask=matchesMask,
+                           flags=0)
+
+        img3 = cv2.drawMatchesKnn(img1, kp1, img2, kp2, matches, None, **draw_params)
+
+        plt.imshow(img3, ), plt.show()
         raise NotImplementedError
 
     def _init_reconstruction(self):

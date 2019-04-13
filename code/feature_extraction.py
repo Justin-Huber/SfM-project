@@ -9,7 +9,7 @@ NUM_KEYPOINTS = 100 # TODO 100, 1 just for testing
 
 
 # https://isotope11.com/blog/storing-surf-sift-orb-keypoints-using-opencv-in-python
-def pickle_keypoints(keypoints, descriptors):
+def serialize_keypoints(keypoints, descriptors):
     i = 0
     temp_array = []
     for point in keypoints:
@@ -20,7 +20,7 @@ def pickle_keypoints(keypoints, descriptors):
     return temp_array
 
 # https://isotope11.com/blog/storing-surf-sift-orb-keypoints-using-opencv-in-python
-def unpickle_keypoints(array):
+def deserialize_keypoints(array):
     keypoints = []
     descriptors = []
     for point in array:
@@ -45,7 +45,7 @@ def pickleable_detect_and_compute(img):
     # Initiate SIFT detector
     sift = cv2.xfeatures2d.SIFT_create(NUM_KEYPOINTS)
     kp, des = sift.detectAndCompute(img, None)
-    return pickle_keypoints(kp, des)
+    return serialize_keypoints(kp, des)
 
 
 def populate_keypoints_and_descriptors(images):
