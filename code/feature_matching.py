@@ -11,7 +11,6 @@ def read_img(path):
     return cv2.imread(path, 0)
 
 
-
 def extract_and_match_draw(gray1, gray2):
     orb = cv2.ORB_create()
     # find the keypoints and descriptors with ORB
@@ -35,7 +34,6 @@ def extract_and_match_draw(gray1, gray2):
     plt.imshow(imgDebug),plt.show()
 
     return cropped_matches
-
 
 
 def extract_and_match(gray1, gray2):
