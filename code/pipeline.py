@@ -9,11 +9,11 @@ from feature_extraction import load_images, populate_keypoints_and_descriptors,\
 class Pipeline():
     """
     A SfM Pipeline for reconstructing a 3D scene from a set of 2D images.
-    
+
     """
     def __init__(self, images_dir, output_dir=os.path.abspath(os.path.join(os.getcwd(), '..')), **kwargs):
         """
-        
+
         :param images_dir: directory containing set of 2D images
                            must only be filled with images
         :param output_dir: directory where pipeline/* will be created
@@ -83,6 +83,23 @@ class Pipeline():
     def _match_features(self):
         raise NotImplementedError
 
+    def _geometric_verification(self):
+        gray1 = cv2.imread("dataset/Bicycle/images/0000.jpg", 0)
+        gray2 = cv2.imread("dataset/Bicycle/images/0002.jpg", 0)
+        sift1 = cv2.xfeatures2d.SIFT_create(100)
+        sift2 = cv2.xfeatures2d.SIFT_create(100)
+        kp1,des1 = sift1.detectAndCompute(gray1,None)
+        kp2,des2 = sift2.detectAndCompute(gray2,None)
+        Compute_and_Store_Distance_Matrix(kp1, kp2, des1, des2, file_num='0')
+        distance_matrix = Load_Distance_Matrix(file_num='0')
+        putative_matches = get_putative_matches(kp1, kp2, distance_matrix)
+        best_transform_matrix, best_count, best_inlier_inx = homography_mapping(putative_matches, kp1, kp2)
+        draw_matches(kp1, kp2, gray1, gray2, best_inlier_inx)
+        print("best_inlier_inx:", best_inlier_inx)
+        print("h_transform:", best_transform_matrix)
+
+        raise NotImplementedError
+
     def _init_reconstruction(self):
         raise NotImplementedError
 
@@ -93,3 +110,4 @@ class Pipeline():
 if __name__ == '__main__':
     pipeline = Pipeline('../datasets/Bicycle/images/')
     pipeline.run()
+    #pipeline._geometric_verification()
