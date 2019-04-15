@@ -7,7 +7,7 @@ import operator
 
 
 #.....................................RANSAC..........................................
-def get_h(putative_matches, kp1, kp2, samples):
+def get_f(putative_matches, kp1, kp2, samples):
 
     p1_1 = kp1[samples[0][0]].pt
     p1_2 = kp2[samples[0][1]].pt
@@ -18,6 +18,18 @@ def get_h(putative_matches, kp1, kp2, samples):
     p4_1 = kp1[samples[3][0]].pt
     p4_2 = kp2[samples[3][1]].pt
 
+    #added for f, bc we need 8 correspondences
+    p5_1 = kp1[samples[4][0]].pt
+    p5_2 = kp2[samples[4][1]].pt
+    p6_1 = kp1[samples[5][0]].pt
+    p6_2 = kp2[samples[5][1]].pt
+    p7_1 = kp1[samples[6][0]].pt
+    p7_2 = kp2[samples[6][1]].pt
+    p8_1 = kp1[samples[7][0]].pt
+    p8_2 = kp2[samples[7][1]].pt
+
+    '''...
+    #for h matrix
     A = np.array([[p1_1[0], p1_1[1], 1,0,0,0, -p1_2[0]*p1_1[0], -p1_2[0]*p1_1[1], -p1_2[0]],
                     [0,0,0, p1_1[0], p1_1[1], 1, -p1_2[1]*p1_1[0], -p1_2[1]*p1_1[1], -p1_2[1]],
                     [p2_1[0], p2_1[1], 1,0,0,0, -p2_2[0]*p2_1[0], -p2_2[0]*p2_1[1], -p2_2[0]],
@@ -26,6 +38,16 @@ def get_h(putative_matches, kp1, kp2, samples):
                     [0,0,0, p3_1[0], p3_1[1], 1, -p3_2[1]*p3_1[0], -p3_2[1]*p3_1[1], -p3_2[1]],
                     [p4_1[0], p4_1[1], 1,0,0,0, -p4_2[0]*p4_1[0], -p4_2[0]*p4_1[1], -p4_2[0]],
                     [0,0,0, p4_1[0], p4_1[1], 1, -p4_2[1]*p4_1[0], -p4_2[1]*p4_1[1], -p4_2[1]]])
+    ...'''
+    #for f matrix
+    A = np.array([[p1_1[0]*p1_2[0], p1_1[1]*p1_2[0], p1_2[0], p1_1[0]*p1_2[1] , p1_1[1]*p1_2[1] ,p1_2[1], p1_1[0], p1_1[1], 1],
+                    [p2_1[0]*p2_2[0], p2_1[1]*p2_2[0], p2_2[0], p2_1[0]*p2_2[1] , p2_1[1]*p2_2[1] ,p2_2[1], p2_1[0], p2_1[1], 1],
+                    [p3_1[0]*p3_2[0], p3_1[1]*p3_2[0], p3_2[0], p3_1[0]*p3_2[1] , p3_1[1]*p3_2[1] ,p3_2[1], p3_1[0], p3_1[1], 1],
+                    [p4_1[0]*p4_2[0], p4_1[1]*p4_2[0], p4_2[0], p4_1[0]*p4_2[1] , p4_1[1]*p4_2[1] ,p4_2[1], p4_1[0], p4_1[1], 1],
+                    [p5_1[0]*p5_2[0], p5_1[1]*p5_2[0], p5_2[0], p5_1[0]*p5_2[1] , p5_1[1]*p5_2[1] ,p5_2[1], p5_1[0], p5_1[1], 1],
+                    [p6_1[0]*p6_2[0], p6_1[1]*p6_2[0], p6_2[0], p6_1[0]*p6_2[1] , p6_1[1]*p6_2[1] ,p6_2[1], p6_1[0], p6_1[1], 1],
+                    [p7_1[0]*p7_2[0], p7_1[1]*p7_2[0], p7_2[0], p7_1[0]*p7_2[1] , p7_1[1]*p7_2[1] ,p7_2[1], p7_1[0], p7_1[1], 1],
+                    [p8_1[0]*p8_2[0], p8_1[1]*p8_2[0], p8_2[0], p8_1[0]*p8_2[1] , p8_1[1]*p8_2[1] ,p8_2[1], p8_1[0], p8_1[1], 1]])
 
     ATA = A.transpose() @ A
     w, v = linalg.eig(ATA)
@@ -45,30 +67,34 @@ def homography_mapping(putative_matches, kp1, kp2):
         inliers = 0
         average_res = 0
 
-        samples = random.sample(putative_matches,4)
-        h = get_h(putative_matches, kp1, kp2, samples)
+        #h:
+        #samples = random.sample(putative_matches,4)
+        #f:
+        samples = random.sample(putative_matches,8)
+
+        f = get_f(putative_matches, kp1, kp2, samples)
 
         for pair in putative_matches:
             pt_1 = kp1[pair[0]].pt
             pt_2 = kp2[pair[1]].pt
             homo_pt_1 = np.append(pt_1,[1])
-            pred_homo_right = h @ homo_pt_1
+            pred_homo_right = f @ homo_pt_1
             pred_right = np.array([pred_homo_right[0]/pred_homo_right[2], pred_homo_right[1]/pred_homo_right[2]])
             diff = np.subtract(pt_2, pred_right)
             error = diff @ diff.transpose()
 
             if error < 10:
-                average_res += error
+                #average_res += error
                 inliers+=1
 
         if inliers > bestcount:
-            best = h
+            best = f
             bestcount = inliers
             bestset = samples
-            best_average_res = average_res
+            #best_average_res = average_res
 
-    best_average_res = best_average_res / bestcount
-    print("best_average_res", best_average_res)
+    #best_average_res = best_average_res / bestcount
+    #print("best_average_res", best_average_res)
 
     return best, bestcount, bestset
 
