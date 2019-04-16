@@ -1,17 +1,18 @@
 import os
+import warnings
 import pickle
 import matplotlib.pyplot as plt
 import cv2
 from tqdm import tqdm
+from sklearn.externals.joblib import Parallel, delayed
 
-from feature_extraction import load_images, populate_keypoints_and_descriptors,\
-                                deserialize_keypoints, serialize_matches, deserialize_matches
-
+from feature_extraction import get_human_readable_exif, populate_keypoints_and_descriptors, deserialize_keypoints
+from feature_matching import serialize_matches, deserialize_matches
 
 class Pipeline:
     """
     A SfM Pipeline for reconstructing a 3D scene from a set of 2D images.
-    
+
     """
     def __init__(self, images_dir, output_dir=os.path.abspath(os.path.join(os.getcwd(), '..')), **kwargs):
         """
@@ -56,27 +57,50 @@ class Pipeline:
             self._reconstruct3d()
         raise NotImplementedError
 
+    def _load_images_impl(self):
+        """
+
+        :return: returns list of images in the images directory
+                in the same order they appear in the directory
+        """
+        if not os.path.exists(self.images_dir):
+            raise RuntimeError("Invalid image directory")
+
+        img_filenames = os.listdir(self.images_dir)
+
+        # TODO get this into legible form
+        exif_data = [get_human_readable_exif(os.path.join(self.images_dir, img_filename)) for img_filename in img_filenames]
+
+        images = Parallel(n_jobs=16)(delayed(cv2.imread)(os.path.join(self.images_dir, img_filename), 0) for img_filename in
+                                     tqdm(img_filenames, desc='Loading images'))
+
+        # TODO add debug option to visualize
+        if self.verbose:
+            plt.imshow(images[0]), plt.show()
+
+        return images, exif_data
+
     def _load_images(self):
-        pickled_images = os.path.join(self.feature_extraction_dir, 'images.pkl')
+        pickled_images = os.path.join(self.feature_extraction_dir, 'images_and_exif.pkl')
         if os.path.exists(pickled_images):
             with open(pickled_images, 'rb') as f:
-                images = pickle.load(f)
+                images, exif_data = pickle.load(f)
         else:
-            images = load_images(self.images_dir)
+            images, exif_data = self._load_images_impl()
             with open(pickled_images, 'wb') as f:
-                pickle.dump(images, f)
+                pickle.dump((images, exif_data), f)
 
-        return images
+        return images, exif_data
 
     def _extract_features(self):
+        self.images, self.exif_data = self._load_images()
+
         pickled_keypoints = os.path.join(self.feature_extraction_dir, 'keypoints.pkl')
         if os.path.exists(pickled_keypoints):
             with open(pickled_keypoints, 'rb') as f:
                 self.keypoints_and_descriptors = pickle.load(f)
         else:
-            images = self._load_images()  # TODO move to the else?
-            self.images = images
-            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(images)
+            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(self.images)
             with open(pickled_keypoints, 'wb') as f:
                 pickle.dump(self.keypoints_and_descriptors, f)
 
@@ -155,12 +179,24 @@ class Pipeline:
             with open(pickled_matches, 'wb') as f:
                 pickle.dump(self.matches, f)
 
-        self.matches = [[deserialize_matches(matches) for matches in image_matches] for image_matches in self.matches]  # TODO above implementation not done yet
+        self.matches = [[deserialize_matches(ij_matches) for ij_matches in i_matches] for i_matches in self.matches]
 
     def _geometric_verification(self):
+        # a weighted adjacency list where an edge's weight is indicated
+        # by the number of geometrically verified matches the two images share
+        self.scene_graph = [[0 for _ in range(len(self.matches))] for _ in range(len(self.matches))]
+
+        # E matrices between all image combinations
+        # TODO value when no edge? None?
+        self.essential_matrices = []
+
+        # geometrically verified matches
+        self.gv_matches = [[None for ij_matches in i_matches] for i_matches in self.matches]
         raise NotImplementedError
 
     def _init_reconstruction(self):
+        # start at the image which has the highest weighted edges
+        # pick it and the image it shares the highest weighted edge with as the first images to register
         raise NotImplementedError
 
     def _reconstruct3d(self):
@@ -168,5 +204,7 @@ class Pipeline:
 
 
 if __name__ == '__main__':
-    pipeline = Pipeline('../datasets/Bicycle/images/', verbose=False)
-    pipeline.run()
+    with warnings.catch_warnings():  # TODO how to not display dep warnings?
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        pipeline = Pipeline('../datasets/Bicycle/images/', verbose=False)
+        pipeline.run()

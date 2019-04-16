@@ -1,10 +1,32 @@
-import os
 import cv2
+
+
+def serialize_matches(matches):
+    temp_array = []
+    for match in matches:
+        temp = (match.distance, match.imgIdx, match.queryIdx, match.trainIdx)
+        temp_array.append(temp)
+    return temp_array
+
+
+def deserialize_matches(matches):
+    temp_array = []
+    for match in matches:
+        if len(match) > 0:
+            temp = cv2.DMatch(_distance=match[0], _imgIdx=match[1],
+                              _queryIdx=match[2], _trainIdx=match[3])
+        else:
+            temp = None
+        temp_array.append(temp)
+    return temp_array
+
+
+
+######### TODO need below? ########
+import os
 import numpy as np
 import math
 import matplotlib.pyplot as plt
-import bisect
-
 
 def read_img(path):
     #read image in grayscale (the 0 lfag indicates grayscale)
