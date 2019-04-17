@@ -5,10 +5,14 @@ import matplotlib.pyplot as plt
 import cv2
 from tqdm import tqdm
 from sklearn.externals.joblib import Parallel, delayed
+import time
+from itertools import combinations
+import numpy as np
 
+# import globals
 from feature_extraction import get_human_readable_exif, populate_keypoints_and_descriptors, deserialize_keypoints
 from feature_matching import serialize_matches, deserialize_matches
-from geometric_verification import *
+from geometric_verification import draw_epipolar
 
 
 class Pipeline:
@@ -64,20 +68,20 @@ class Pipeline:
 
         :return: returns list of images in the images directory
                 in the same order they appear in the directory
+                and a list of exif information for those images
         """
         if not os.path.exists(self.images_dir):
             raise RuntimeError("Invalid image directory")
 
         img_filenames = os.listdir(self.images_dir)
 
-        # TODO get this into legible form
         exif_data = [get_human_readable_exif(os.path.join(self.images_dir, img_filename)) for img_filename in img_filenames]
 
-        images = Parallel(n_jobs=16)(delayed(cv2.imread)(os.path.join(self.images_dir, img_filename), 0) for img_filename in
-                                     tqdm(img_filenames, desc='Loading images'))
+        images = Parallel(n_jobs=-1, backend='threading')(delayed(cv2.imread)(os.path.join(self.images_dir, img_filename), 0)
+                                                            for img_filename in tqdm(img_filenames, desc='Loading images'))
 
         # TODO add debug option to visualize
-        if self.verbose:
+        if self.verbose and input("Visualize image loading? (y/n) ") == 'y':
             plt.imshow(images[0]), plt.show()
 
         return images, exif_data
@@ -96,6 +100,7 @@ class Pipeline:
 
     def _extract_features(self):
         self.images, self.exif_data = self._load_images()
+        self.num_images = len(self.images)
 
         pickled_keypoints = os.path.join(self.feature_extraction_dir, 'keypoints.pkl')
         if os.path.exists(pickled_keypoints):
@@ -110,7 +115,7 @@ class Pipeline:
         self.keypoints_and_descriptors = [deserialize_keypoints(kps_and_des) for kps_and_des in self.keypoints_and_descriptors]
 
         # TODO add debug option to visualize
-        if self.verbose:
+        if self.verbose and input("Visualize keypoints? (y/n) ") == 'y':
             img = self.images[0]
             vis_keypoints = self.keypoints_and_descriptors[0][0]
             vis_img = cv2.drawKeypoints(img, vis_keypoints, img, flags=4)  # draws rich keypoints
@@ -153,7 +158,7 @@ class Pipeline:
                         if matchMask[0]:
                             i_with_j_matches.append(match[0])
 
-                    if self.verbose:
+                    if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
                         # TODO add debug option to visualize
                         img1 = self.images[i]
                         img2 = self.images[j]
@@ -161,7 +166,7 @@ class Pipeline:
                         draw_params = dict(matchColor=(0, 255, 0),
                                            singlePointColor=(255, 0, 0),
                                            matchesMask=matchesMask,
-                                           flags=0)
+                                           flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
 
                         img3 = cv2.drawMatchesKnn(img1, kp1, img2, kp2, matches, None, **draw_params)
                         plt.imshow(img3), plt.show()
@@ -182,36 +187,58 @@ class Pipeline:
                 pickle.dump(self.matches, f)
 
         self.matches = [[deserialize_matches(ij_matches) for ij_matches in i_matches] for i_matches in self.matches]
+        self.matches = [[sorted(ij_matches, key=lambda match: match.distance) for ij_matches in i_matches] for i_matches in self.matches]
+
+        if self.verbose and input("Visualize matches? (y/n) ") == 'y':
+            for i in range(self.num_images):
+                for j in range(self.num_images):
+                    if len(self.matches[i][j]) > 0:
+                        img3 = cv2.drawMatches(self.images[i], self.keypoints_and_descriptors[i][0],
+                                                self.images[j], self.keypoints_and_descriptors[j][0],
+                                                self.matches[i][j], None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+                        plt.imshow(img3), plt.show()
+            # TODO add visualization
+
+    def _geometric_verification_impl(self, i, j):
+        # TODO multithreading accessing a list, how does it work?
+        # TODO check that GIL isn't preventing parallelism
+        pts1 = np.array([self.keypoints_and_descriptors[i][0][match.trainIdx].pt for match in self.matches[i][j]])
+        pts2 = np.array([self.keypoints_and_descriptors[j][0][match.queryIdx].pt for match in self.matches[i][j]])
+
+        # TODO do our own implementation
+        F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC)
+        im1, im2 = self.images[i], self.images[j]
+        gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
+        gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
+        print(i, j)
+        # TODO incorrect epipolar lines?
+        draw_epipolar(im1, im2, F, pts1.astype(int), pts2.astype(int))
+        draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
+
+
+        # TODO add a debug option for visualization
+        # TODO get E from exif data and F
 
     def _geometric_verification(self):
         # a weighted adjacency list where an edge's weight is indicated
         # by the number of geometrically verified matches the two images share
-        self.scene_graph = [[0 for _ in range(len(self.matches))] for _ in range(len(self.matches))]
+        self.scene_graph = [[0 for _ in range(self.num_images)] for _ in range(self.num_images)]
 
         # E matrices between all image combinations
-        # TODO value when no edge? None?
-        self.essential_matrices = []
+        # None when images don't share an edge
+        self.essential_matrices = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        # geometrically verified matches
-        self.gv_matches = [[None for ij_matches in i_matches] for i_matches in self.matches]
+        # geometrically verified matches TODO mask?
+        self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
+
+        # TODO old implementation
+        # ij_combs = [(i, j) for i in range(self.num_images) for j in range(self.num_images)]
+        # ij_combs = list(set([tuple(sorted(list(tup))) for tup in ij_combs]))
+        ij_combs = list(combinations(range(self.num_images), 2))
+        Parallel(n_jobs=1, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
+                for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
+
         raise NotImplementedError
-
-        gray1 = cv2.imread('../dataset/Bicycle/images/0000.jpg')
-        gray1= cv2.cvtColor(gray1,cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.imread('../dataset/Bicycle/images/0002.jpg')
-        gray2= cv2.cvtColor(gray2,cv2.COLOR_BGR2GRAY)
-        sift1 = cv2.xfeatures2d.SIFT_create(100)
-        sift2 = cv2.xfeatures2d.SIFT_create(100)
-        kp1,des1 = sift1.detectAndCompute(gray1,None)
-        kp2,des2 = sift2.detectAndCompute(gray2,None)
-        Compute_and_Store_Distance_Matrix(kp1, kp2, des1, des2, file_num='0')
-        distance_matrix = Load_Distance_Matrix(file_num='0')
-        putative_matches = get_putative_matches(kp1, kp2, distance_matrix)
-        best_transform_matrix, best_count, best_inlier_inx = homography_mapping(putative_matches, kp1, kp2)
-        draw_matches(kp1, kp2, gray1, gray2, best_inlier_inx)
-        print("best_inlier_inx:", best_inlier_inx)
-        print("f_matrix:", best_transform_matrix)
-        return
 
     def _init_reconstruction(self):
         # start at the image which has the highest weighted edges
@@ -223,7 +250,13 @@ class Pipeline:
 
 
 if __name__ == '__main__':
+    # TODO may not be necessary
+    # globals.init('../datasets/Bicycle/images/')
+
     with warnings.catch_warnings():  # TODO how to not display dep warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-        pipeline = Pipeline('../datasets/Bicycle/images/')
+
+        pipeline = Pipeline('../datasets/Bicycle/images/', verbose=True)
         pipeline.run()
+
+        # globals.pipeline.run()

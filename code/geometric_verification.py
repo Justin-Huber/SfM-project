@@ -4,6 +4,49 @@ import numpy as np
 import random
 from scipy import linalg
 import operator
+import time
+
+
+def drawlines(img1, img2, lines, pts1, pts2):
+    r, c = img1.shape
+    img1 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
+    for r, pt1, pt2 in zip(lines, pts1, pts2):
+        color = tuple(np.random.randint(0, 255, 3).tolist())
+        x0, y0 = map(int, [0, -r[2]/r[1]])
+        x1, y1 = map(int, [c, -(r[2]+r[0]*c)/r[1]])
+        img1 = cv2.line(img1, (x0, y0), (x1, y1), color, 1)
+        img1 = cv2.circle(img1, tuple(pt1), 15, color, -1)
+        img2 = cv2.circle(img2, tuple(pt2), 15, color, -1)
+    return img1, img2
+
+
+def draw_epipolar(img1, img2, F, pts1, pts2):
+    lines1 = cv2.computeCorrespondEpilines(pts2.reshape(-1, 1, 2), 2, F)
+    lines1 = lines1.reshape(-1, 3)
+    img5, img6 = drawlines(img1, img2, lines1, pts1, pts2)
+
+    lines2 = cv2.computeCorrespondEpilines(pts1.reshape(-1, 1, 2), 1, F)
+    lines2 = lines2.reshape(-1, 3)
+    img3, img4 = drawlines(img2, img1, lines2, pts2, pts1)
+
+    plt.subplot(121)
+    plt.imshow(img5)
+    plt.subplot(122)
+    plt.imshow(img3)
+    plt.show()
+
+
+def _geometric_verification_impl(i, j):
+    """
+
+    :param i:
+    :param j:
+    :return:
+    """
+
+    # globals.pipeline._geometric_verification_impl(i, j)
+    time.sleep(0.001)
 
 
 #.....................................RANSAC..........................................
@@ -55,7 +98,6 @@ def get_f(putative_matches, kp1, kp2, samples):
     return h
 
 
-
 def homography_mapping(putative_matches, kp1, kp2):
     best_average_res = 0
     best = None
@@ -99,7 +141,6 @@ def homography_mapping(putative_matches, kp1, kp2):
     return best, bestcount, bestset
 
 
-
 #..........................Compute Distance Matrix....................................
 def Compute_and_Store_Distance_Matrix(kp1, kp2, des1, des2, file_num):
     #Normalizing:
@@ -127,10 +168,8 @@ def Compute_and_Store_Distance_Matrix(kp1, kp2, des1, des2, file_num):
     return
 
 
-
 def Load_Distance_Matrix(file_num):
     return np.load("outfile" + file_num + ".npy")
-
 
 
 def get_putative_matches(kp1, kp2, distance_matrix):
