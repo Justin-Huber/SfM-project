@@ -1,10 +1,7 @@
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-import random
-from scipy import linalg
-import operator
-import time
+import open3d
 
 
 def drawlines(img1, img2, lines, pts1, pts2):
@@ -37,189 +34,306 @@ def draw_epipolar(img1, img2, F, pts1, pts2):
     plt.show()
 
 
-def _geometric_verification_impl(i, j):
+def get_K_from_exif(exif_data):
+    width = exif_data['ExifImageWidth']
+    height = exif_data['ExifImageHeight']
+    focal_length = exif_data['FocalLength'][0]
+    focal_plane_res_unit = exif_data['FocalPlaneResolutionUnit']
+    focal_plane_x_res = exif_data['FocalPlaneXResolution'][0]
+    focal_plane_y_res = exif_data['FocalPlaneXResolution'][0]
+
+    # if focal_plane_res_unit == 1:
+    #     conversion = 1
+    # elif focal_plane_res_unit == 2:
+    #     conversion =
+    # elif focal_plane_res_unit == 3:
+    #     conversion =
+    # elif focal_plane_res_unit == 4:
+    #     conversion =
+
+    conversion = focal_plane_res_unit
+
+    return np.array([[focal_length * width * conversion / focal_plane_x_res, 0, width / 2],
+                      [0, focal_length * height * conversion / focal_plane_y_res, height / 2],
+                      [0, 0, 1]])
+
+
+from skimage import data
+from skimage.color import rgb2gray
+from skimage.feature import match_descriptors, ORB, plot_matches
+from skimage.measure import ransac
+from skimage import io
+from skimage.transform import FundamentalMatrixTransform
+from skimage import img_as_ubyte
+
+
+def findFundamentalMat(im1, im2, pts1, pts2, eig_then_svd=False):
+    ones = np.ones((pts1.shape[0], 1))
+    homog_pts1 = np.append(pts1, ones, axis=1)
+    homog_pts2 = np.append(pts2, ones, axis=1)
+
+    T = np.diag(np.ones(homog_pts1.shape[1]) / np.max(im1.shape))
+    T[-1, -1] = 1
+    T_prime = np.diag(np.ones(homog_pts2.shape[1]) / np.max(im2.shape))
+    T_prime[-1, -1] = 1
+
+    # mean1 = np.mean(pts1, axis=0)
+    # mean2 = np.mean(pts2, axis=0)
+    # T = np.diag(np.ones(homog_pts1.shape[1]))
+    # T[0, 2] = -mean1[1]
+    # T[1, 2] = -mean1[0]
+    # T_prime = np.diag(np.ones(homog_pts2.shape[1]))
+    # T_prime[0, 2] = -mean2[1]
+    # T_prime[1, 2] = -mean2[0]
+
+    pts1_norm = homog_pts1.dot(T)
+    pts2_norm = homog_pts2.dot(T_prime)
+
+    A = np.array(
+        [(pt1.reshape(1, *pt1.shape) * pt2.reshape(*pt2.shape, 1)).flatten() for pt1, pt2 in zip(pts1_norm, pts2_norm)])
+
+    if eig_then_svd:
+        eig_vals, eig_vecs = np.linalg.eig(A.T.dot(A))
+        idx = np.argmin(eig_vals)
+        F = eig_vecs[:, idx].reshape(3, 3)
+    else:
+        U, SIGMA, V_T = np.linalg.svd(A.T @ A, full_matrices=True)
+        F = V_T[8].reshape(3, 3)
+
+    U, SIGMA, V_T = np.linalg.svd(F, full_matrices=True)
+    SIGMA[2:] = 0
+    F = U @ np.diag(SIGMA) @ V_T
+    F /= F[2, 2]
+    F = T_prime.T @ F @ T
+
+    return F
+
+
+
+
+
+def findPointCloud(R, t, pts1, pts2):
+    #####################################################################
+    # 4
+    #####################################################################
+    I = np.diag(np.ones(R.shape[1]))
+    I_zeros = np.append(I, np.zeros((I.shape[0], 1)), axis=1)
+    R_t = np.append(R, t, axis=1)
+
+    P1 = K1 @ I_zeros
+    P2 = K2 @ R_t
+
+    #####################################################################
+    # 5
+    #####################################################################
+    X = cv2.triangulatePoints(P1[:3], P2[:3], pts1.T.astype(float), pts2.T.astype(float))
+    X /= X[3]
+
+    X_prime1 = P1 @ X
+    X_prime2 = P2 @ X
+
+    mask1 = X_prime1[2] > 0
+    mask2 = X_prime2[2] > 0
+
+    mask = [all(tup) for tup in zip(mask1, mask2)]
+
+    return X[:, mask]
+
+
+def visualize_pcd(points):
     """
-
-    :param i:
-    :param j:
-    :return:
+    Visualize the point cloud.
     """
-
-    # globals.pipeline._geometric_verification_impl(i, j)
-    time.sleep(0.001)
-
-
-#.....................................RANSAC..........................................
-def get_f(putative_matches, kp1, kp2, samples):
-
-    p1_1 = kp1[samples[0][0]].pt
-    p1_2 = kp2[samples[0][1]].pt
-    p2_1 = kp1[samples[1][0]].pt
-    p2_2 = kp2[samples[1][1]].pt
-    p3_1 = kp1[samples[2][0]].pt
-    p3_2 = kp2[samples[2][1]].pt
-    p4_1 = kp1[samples[3][0]].pt
-    p4_2 = kp2[samples[3][1]].pt
-
-    #added for f, bc we need 8 correspondences
-    p5_1 = kp1[samples[4][0]].pt
-    p5_2 = kp2[samples[4][1]].pt
-    p6_1 = kp1[samples[5][0]].pt
-    p6_2 = kp2[samples[5][1]].pt
-    p7_1 = kp1[samples[6][0]].pt
-    p7_2 = kp2[samples[6][1]].pt
-    p8_1 = kp1[samples[7][0]].pt
-    p8_2 = kp2[samples[7][1]].pt
-
-    '''...
-    #for h matrix
-    A = np.array([[p1_1[0], p1_1[1], 1,0,0,0, -p1_2[0]*p1_1[0], -p1_2[0]*p1_1[1], -p1_2[0]],
-                    [0,0,0, p1_1[0], p1_1[1], 1, -p1_2[1]*p1_1[0], -p1_2[1]*p1_1[1], -p1_2[1]],
-                    [p2_1[0], p2_1[1], 1,0,0,0, -p2_2[0]*p2_1[0], -p2_2[0]*p2_1[1], -p2_2[0]],
-                    [0,0,0, p2_1[0], p2_1[1], 1, -p2_2[1]*p2_1[0], -p2_2[1]*p2_1[1], -p2_2[1]],
-                    [p3_1[0], p3_1[1], 1,0,0,0, -p3_2[0]*p3_1[0], -p3_2[0]*p3_1[1], -p3_2[0]],
-                    [0,0,0, p3_1[0], p3_1[1], 1, -p3_2[1]*p3_1[0], -p3_2[1]*p3_1[1], -p3_2[1]],
-                    [p4_1[0], p4_1[1], 1,0,0,0, -p4_2[0]*p4_1[0], -p4_2[0]*p4_1[1], -p4_2[0]],
-                    [0,0,0, p4_1[0], p4_1[1], 1, -p4_2[1]*p4_1[0], -p4_2[1]*p4_1[1], -p4_2[1]]])
-    ...'''
-    #for f matrix
-    A = np.array([[p1_1[0]*p1_2[0], p1_1[1]*p1_2[0], p1_2[0], p1_1[0]*p1_2[1] , p1_1[1]*p1_2[1] ,p1_2[1], p1_1[0], p1_1[1], 1],
-                    [p2_1[0]*p2_2[0], p2_1[1]*p2_2[0], p2_2[0], p2_1[0]*p2_2[1] , p2_1[1]*p2_2[1] ,p2_2[1], p2_1[0], p2_1[1], 1],
-                    [p3_1[0]*p3_2[0], p3_1[1]*p3_2[0], p3_2[0], p3_1[0]*p3_2[1] , p3_1[1]*p3_2[1] ,p3_2[1], p3_1[0], p3_1[1], 1],
-                    [p4_1[0]*p4_2[0], p4_1[1]*p4_2[0], p4_2[0], p4_1[0]*p4_2[1] , p4_1[1]*p4_2[1] ,p4_2[1], p4_1[0], p4_1[1], 1],
-                    [p5_1[0]*p5_2[0], p5_1[1]*p5_2[0], p5_2[0], p5_1[0]*p5_2[1] , p5_1[1]*p5_2[1] ,p5_2[1], p5_1[0], p5_1[1], 1],
-                    [p6_1[0]*p6_2[0], p6_1[1]*p6_2[0], p6_2[0], p6_1[0]*p6_2[1] , p6_1[1]*p6_2[1] ,p6_2[1], p6_1[0], p6_1[1], 1],
-                    [p7_1[0]*p7_2[0], p7_1[1]*p7_2[0], p7_2[0], p7_1[0]*p7_2[1] , p7_1[1]*p7_2[1] ,p7_2[1], p7_1[0], p7_1[1], 1],
-                    [p8_1[0]*p8_2[0], p8_1[1]*p8_2[0], p8_2[0], p8_1[0]*p8_2[1] , p8_1[1]*p8_2[1] ,p8_2[1], p8_1[0], p8_1[1], 1]])
-
-    ATA = A.transpose() @ A
-    w, v = linalg.eig(ATA)
-    h = v[:,len(w)-1].reshape((3,3))
-    return h
+    pcd = open3d.PointCloud()
+    pcd.points = open3d.Vector3dVector(points)
+    # Uncomment this line if you want to paint some color
+    # pcd.paint_uniform_color([0, 0, 1])
+    open3d.draw_geometries([pcd])
 
 
-def homography_mapping(putative_matches, kp1, kp2):
-    best_average_res = 0
-    best = None
-    bestcount =  -1
-    bestset = []
+def visualize_gv(K1, K2, F, pts1, pts2):
+    E = K2.T @ F @ K1
 
-    for trial in range(100):
+    R1, R2, t = cv2.decomposeEssentialMat(E)
 
-        inliers = 0
-        average_res = 0
+    X = np.array(([0], [0]))
 
-        #h:
-        #samples = random.sample(putative_matches,4)
-        #f:
-        samples = random.sample(putative_matches,8)
+    for args in [[R1, t], [R1, -t], [R2, t], [R2, -t]]:
+        tmp = findPointCloud(*args, pts1, pts2)
 
-        f = get_f(putative_matches, kp1, kp2, samples)
+        if tmp.shape[1] > X.shape[1]:
+            X = tmp
+        # visualize_pcd(tmp[:3].astype(float).T)
 
-        for pair in putative_matches:
-            pt_1 = kp1[pair[0]].pt
-            pt_2 = kp2[pair[1]].pt
-            homo_pt_1 = np.append(pt_1,[1])
-            pred_homo_right = f @ homo_pt_1
-            pred_right = np.array([pred_homo_right[0]/pred_homo_right[2], pred_homo_right[1]/pred_homo_right[2]])
-            diff = np.subtract(pt_2, pred_right)
-            error = diff @ diff.transpose()
-
-            if error < 10:
-                #average_res += error
-                inliers+=1
-
-        if inliers > bestcount:
-            best = f
-            bestcount = inliers
-            bestset = samples
-            #best_average_res = average_res
-
-    #best_average_res = best_average_res / bestcount
-    #print("best_average_res", best_average_res)
-
-    return best, bestcount, bestset
+    visualize_pcd(X[:3].astype(float).T)
 
 
-#..........................Compute Distance Matrix....................................
-def Compute_and_Store_Distance_Matrix(kp1, kp2, des1, des2, file_num):
-    #Normalizing:
-    for i in range(0, len(des1)):
-        mean = np.mean(des1[i])
-        des1[i] = des1[i] - mean
-        des1[i] = des1[i] / np.std(des1[i])
+def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches):
+    # Plot all
 
-    for i in range(0, len(des2)):
-        mean = np.mean(des2[i])
-        des2[i] = des2[i] - mean
-        des2[i] = des2[i] / np.std(des2[i])
+    fig, ax = plt.subplots(nrows=2, ncols=1)
 
-    distance_matrix = np.zeros((len(kp1), len(kp2)))
+    plt.gray()
 
-    for i in range(0, len(kp1)):
-        for j in range(0, len(kp2)):
-            distanceCurr = 0
-            for k in range(0, len(des1[i])):
-                distanceCurr += (des1[i][k] - des2[j][k]) ** 2
-            distanceCurr = distanceCurr ** (1/2)
-            distance_matrix[i][j] = distanceCurr
-    #Storing the matrix to a npy file
-    np.save("outfile" + file_num + ".npy", distance_matrix)
-    return
+    plot_matches(ax[0], img_left, img_right, keypoints_left, keypoints_right,
+                 matches, only_matches=True)
+    ax[0].axis("off")
+    ax[0].set_title("Matches")
+
+    plt.show()
+    plt.cla()
 
 
-def Load_Distance_Matrix(file_num):
-    return np.load("outfile" + file_num + ".npy")
+def visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, matches, inliers):
+    cv_keypoints_left = np.array([cv2.KeyPoint(x=point[1], y=point[0],
+                                               _size=0, _angle=0,
+                                               _response=0, _octave=0,
+                                               _class_id=0) for point in keypoints_left])
+    cv_keypoints_right = np.array([cv2.KeyPoint(x=point[1], y=point[0],
+                                                _size=0, _angle=0,
+                                                _response=0, _octave=0,
+                                                _class_id=0) for point in keypoints_right])
+    cv_matches = np.array([cv2.DMatch(_distance=0, _imgIdx=0,
+                                      _queryIdx=match[0], _trainIdx=match[1]) for match in matches])
+    cv_inlier_matches = cv_matches[inliers]
+    img = cv2.drawMatches(img_left, cv_keypoints_left, img_right, cv_keypoints_right, cv_inlier_matches, None,
+                          flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+    plt.imshow(img), plt.show()
 
 
-def get_putative_matches(kp1, kp2, distance_matrix):
-    distance_dict = {}
-    coor_dict = {}
-    pair_dict = {}
+if __name__ == '__main__':
+    # TODO pixel bug?
+    np.random.seed(0)
+    file1 = '../datasets/EmpireVase/images/0090.jpg'
+    file2 = '../datasets/EmpireVase/images/0098.jpg'
+    # file1 = '../data/im1.png'
+    # file2 = '../data/im2.png'
+    visualize_all_matches = False
+    visualize_good_matches_sk = False
+    visualize_good_matches_cv = True
+    visualize_8pt = False
+    visualize_ransac = False
+    visualize_mine = True
 
+    temple = np.load('../data/temple.npz')
+    K1, K2, pts1, pts2 = temple['K1'], temple['K2'], temple['pts1'], temple['pts2']
+    im1, im2 = cv2.imread('../data/im1.png', cv2.IMREAD_GRAYSCALE), cv2.imread('../data/im2.png', cv2.IMREAD_GRAYSCALE)
 
-    for i in range(0, distance_matrix.shape[0]):
-        distance_dict.setdefault(i, distance_matrix[i].min())
-        pair_dict.setdefault(i, np.argmin(distance_matrix[i]))
-        coor_dict.setdefault(i, kp2[np.argmin(distance_matrix[i])].pt)
+    false = True
+    if false:
+        img_left, img_right = io.imread(file1), io.imread(file2)
+        # img_left, img_right, _ = data.stereo_motorcycle()
+        img_left, img_right = map(rgb2gray, (img_left, img_right))
 
-    distance_list = sorted(distance_dict.items(), key=operator.itemgetter(1))
+        # Find sparse feature correspondences between left and right image.
 
-    #select the top 200 min distances:
-    putative_matches = {}
+        descriptor_extractor = ORB(n_keypoints=8000)
 
-    for i in range(0, len(distance_list)):
-        #print(distance_dict.get(key))
-        #print("distance: ", distance_list[i][1])
-        putative_matches.setdefault(distance_list[i][0], distance_list[i][1])
-        if i == 13:
-            break
+        descriptor_extractor.detect_and_extract(img_left)
+        keypoints_left = descriptor_extractor.keypoints
+        descriptors_left = descriptor_extractor.descriptors
 
-    delKeys = []
-    for key in coor_dict:
-        if key not in putative_matches:
-            delKeys.append(key)
+        descriptor_extractor.detect_and_extract(img_right)
+        keypoints_right = descriptor_extractor.keypoints
+        descriptors_right = descriptor_extractor.descriptors
 
-    for key in delKeys:
-        del coor_dict[key]
-        del pair_dict[key]
+        matches = match_descriptors(descriptors_left, descriptors_right,
+                                    cross_check=True)
+        print("Number of matches:", matches.shape[0])
 
-    pair_list = []
-    for i in pair_dict:
-       k = (i,pair_dict[i])
-       pair_list.append(k)
+        if visualize_all_matches:
+            visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches)
 
-    return pair_list
+        model, inliers = ransac((keypoints_left[matches[:, 0]],
+                                 keypoints_right[matches[:, 1]]),
+                                FundamentalMatrixTransform, min_samples=8,
+                                residual_threshold=0.001*max(img_left.shape), max_trials=5000)
+        print("Number of inliers:", inliers.sum())
 
+        if visualize_good_matches_sk:
+            visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches[inliers])
 
-def draw_matches(kp1, kp2, gray1, gray2, best_inlier_inx):
-    matches = []
-    dist = 0
-    for i in range(0, len(best_inlier_inx)):
-        match = cv2.DMatch(best_inlier_inx[i][0], best_inlier_inx[i][1], dist)
-        matches.append(match)
+        img_left = img_as_ubyte(img_left)
+        img_right = img_as_ubyte(img_right)
 
+        if visualize_good_matches_cv:
+            visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, matches, inliers)
 
-    img3 = cv2.drawMatches(gray1,kp1,gray2,kp2,matches, None)
-    plt.imshow(img3),plt.show()
-    return
+        inlier_keypoints_left = keypoints_left[matches[inliers, 0]]
+        inlier_keypoints_left = inlier_keypoints_left.astype(int)
+        inlier_keypoints_left = np.array([(x, y) for (y, x) in inlier_keypoints_left])
+        inlier_keypoints_right = keypoints_right[matches[inliers, 1]]
+        inlier_keypoints_right = inlier_keypoints_right.astype(int)
+        inlier_keypoints_right = np.array([(x, y) for (y, x) in inlier_keypoints_right])
+        model.params /= model.params[2,2]
+
+        sample_from = np.random.choice(inlier_keypoints_left.shape[0], 20)
+        sampled_kp_left = inlier_keypoints_left[sample_from, :]
+        sampled_kp_right = inlier_keypoints_right[sample_from, :]
+
+        # TODO potentially another round of RANSAC here to initialize F correctly
+        # Create F matrices
+        CV8_F, mask = cv2.findFundamentalMat(sampled_kp_left, sampled_kp_right, method=cv2.FM_8POINT)
+        CVR_F, mask = cv2.findFundamentalMat(sampled_kp_left, sampled_kp_right, method=cv2.FM_RANSAC)
+        MY_F = findFundamentalMat(img_left, img_right, sampled_kp_left, sampled_kp_right)
+    else:
+        img_left = im1
+        img_right = im2
+        inlier_keypoints_left = pts1
+        inlier_keypoints_right = pts2
+
+    CV8_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right, method=cv2.FM_8POINT)
+    CVR_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right, method=cv2.FM_RANSAC)
+    MY_F = findFundamentalMat(img_left, img_right, inlier_keypoints_left, inlier_keypoints_right, True)
+    F = findFundamentalMat(im1, im2, pts1, pts2, True)
+
+    print('CV8 F: ', CV8_F)
+    if visualize_8pt:
+        draw_epipolar(img_left, img_right,
+                      CV8_F,
+                      inlier_keypoints_left, inlier_keypoints_right)
+    print('CVR F: ', CVR_F)
+    if visualize_ransac:
+        draw_epipolar(img_left, img_right,
+                      CVR_F,
+                      inlier_keypoints_left, inlier_keypoints_right)
+    print('My F: ', MY_F)
+    if visualize_mine:
+        draw_epipolar(img_left, img_right,
+                      MY_F,
+                      inlier_keypoints_left, inlier_keypoints_right)
+
+    # Draw 3D
+    from feature_extraction import get_human_readable_exif
+    import os
+    exif_data1 = get_human_readable_exif(file1)
+    exif_data2 = get_human_readable_exif(file2)
+
+    K1 = np.array([[1520.4, 0, 302.3],
+                   [0, 1525.9, 246.9],
+                   [0, 0, 1]])
+    K2 = np.array([[1520.4, 0, 302.3],
+                   [0, 1525.9, 246.9],
+                   [0, 0, 1]])
+
+    # TODO focal length?
+    K1 = np.array([[1520.4, 0, img_left.shape[1] / 2],
+                   [0, 1520.4, img_left.shape[0] / 2],
+                   [0, 0, 1]])
+    K2 = np.array([[1520.4, 0, img_right.shape[1] / 2],
+                   [0, 1520.4, img_right.shape[0] / 2],
+                   [0, 0, 1]])
+
+    # TODO ask about this
+    K1 = get_K_from_exif(exif_data1)
+    K2 = get_K_from_exif(exif_data2)
+
+    # TODO doesnt work
+    # K1 = np.array([[1, 0, 0],
+    #                [0, 1, 0],
+    #                [0, 0, 1]])
+    # K2 = np.array([[1, 0, 0],
+    #                [0, 1, 0],
+    #                [0, 0, 1]])
+
+    visualize_gv(K1, K2, F, inlier_keypoints_left, inlier_keypoints_right)

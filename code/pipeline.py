@@ -146,12 +146,13 @@ class Pipeline:
                     matches = matcher.knnMatch(des1, des2, k=2)
 
                     # Need to draw only good matches, so create a mask
-                    matchesMask = [[0, 0] for _ in range(len(matches))]
+                    matchesMask = [[1, 0] for _ in range(len(matches))]
 
+                    # TODO remove
                     # ratio test as per Lowe's paper
-                    for k, (m, n) in enumerate(matches):
-                        if m.distance < 0.75 * n.distance:  # TODO do we still want to filter out these? e.g. for bike, many useful points map to many others so they won't be included
-                            matchesMask[k] = [1, 0]
+                    # for k, (m, n) in enumerate(matches):
+                    #     if m.distance < 0.75 * n.distance:  # TODO do we still want to filter out these? e.g. for bike, many useful points map to many others so they won't be included
+                    #         matchesMask[k] = [1, 0]
 
                     i_with_j_matches = []
                     for match, matchMask in zip(matches, matchesMask):
@@ -175,6 +176,30 @@ class Pipeline:
             image_matches.append(i_matches)
         return image_matches
 
+    def visualize_matches(self, i, j, mask=None):
+        """
+        Function to visualize matches between two images by their indices
+
+        :param i: image i
+        :param j: image j
+        :return:
+        """
+
+        # TODO make more elegant if possible
+        if mask is None:
+            img = cv2.drawMatches(self.images[i], self.keypoints_and_descriptors[i][0],
+                                   self.images[j], self.keypoints_and_descriptors[j][0],
+                                   self.matches[i][j], None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        else:
+            # TODO change all other lists to numpy ArrayItemContainers
+            matches_as_np = np.array(self.matches[i][j])[mask == 1]
+            kps_i_as_np = np.array(self.keypoints_and_descriptors[i][0])[mask == 1]
+            kps_j_as_np = np.array(self.keypoints_and_descriptors[j][0])[mask == 1]
+            img = cv2.drawMatches(self.images[i], self.keypoints_and_descriptors[i][0],
+                                  self.images[j], self.keypoints_and_descriptors[i][0],
+                                  matches_as_np, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)#cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        plt.imshow(img), plt.show()
+
     def _match_features(self):
         # TODO decide between saving all matches in one go or incrementally for each image's matches
         pickled_matches = os.path.join(self.feature_matching_dir, 'matches.pkl')
@@ -193,10 +218,7 @@ class Pipeline:
             for i in range(self.num_images):
                 for j in range(self.num_images):
                     if len(self.matches[i][j]) > 0:
-                        img3 = cv2.drawMatches(self.images[i], self.keypoints_and_descriptors[i][0],
-                                                self.images[j], self.keypoints_and_descriptors[j][0],
-                                                self.matches[i][j], None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-                        plt.imshow(img3), plt.show()
+                        self.visualize_matches(i, j)
             # TODO add visualization
 
     def _geometric_verification_impl(self, i, j):
@@ -205,16 +227,23 @@ class Pipeline:
         pts1 = np.array([self.keypoints_and_descriptors[i][0][match.trainIdx].pt for match in self.matches[i][j]])
         pts2 = np.array([self.keypoints_and_descriptors[j][0][match.queryIdx].pt for match in self.matches[i][j]])
 
+        # TODO opencv does normalization
+        # normalization matrices for the points with
+        T = None
+        T_prime = None
+
         # TODO do our own implementation
-        F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC)
+        # ransacReprojThreshold: threshold for inliers, 1-3 recommended by OpenCV documentation
+        # confidence: desired probability that the estimated matrix is correct
+        F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, method=cv2.FM_RANSAC, ransacReprojThreshold=10, confidence=0.999)
         im1, im2 = self.images[i], self.images[j]
         gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
         gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
-        print(i, j)
-        # TODO incorrect epipolar lines?
-        draw_epipolar(im1, im2, F, pts1.astype(int), pts2.astype(int))
-        draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
 
+        self.visualize_matches(i, j)
+        self.visualize_matches(i, j, inliers_mask.ravel())
+        # TODO incorrect epipolar lines?
+        draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
 
         # TODO add a debug option for visualization
         # TODO get E from exif data and F
@@ -228,12 +257,9 @@ class Pipeline:
         # None when images don't share an edge
         self.essential_matrices = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        # geometrically verified matches TODO mask?
+        # geometrically verified matches TODO mask? yes
         self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        # TODO old implementation
-        # ij_combs = [(i, j) for i in range(self.num_images) for j in range(self.num_images)]
-        # ij_combs = list(set([tuple(sorted(list(tup))) for tup in ij_combs]))
         ij_combs = list(combinations(range(self.num_images), 2))
         Parallel(n_jobs=1, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
                 for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
@@ -256,7 +282,7 @@ if __name__ == '__main__':
     with warnings.catch_warnings():  # TODO how to not display dep warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        pipeline = Pipeline('../datasets/Bicycle/images/', verbose=True)
+        pipeline = Pipeline('../datasets/Bicycle/images/', verbose=False)
         pipeline.run()
 
         # globals.pipeline.run()

@@ -78,6 +78,7 @@ def populate_keypoints_and_descriptors(images):
     """
     # Initiate SIFT detector
     # find the keypoints and descriptors with SIFT
+    # TODO not parallel?
     kps_and_des = Parallel(n_jobs=-1)(delayed(pickleable_detect_and_compute)(img) for img in
                             tqdm(images, desc='Extracting features and descriptors'))
 
