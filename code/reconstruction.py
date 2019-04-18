@@ -22,8 +22,19 @@ def get_camera_pose(image, objectPoints, cameraMatrix):   #passes in image to be
     yaw = rvecs[2]
 
     camera_pose = [x, y, z, pitch, roll, yaw]
-
     return camera_pose
+
+
+
+def get_camera_matrix():
+
+    return []
+
+
+
+def get_object_points(images_init):
+
+    return []
 
 
 
