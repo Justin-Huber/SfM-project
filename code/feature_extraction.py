@@ -1,6 +1,12 @@
 from sklearn.externals.joblib import Parallel, delayed
 import cv2
-from tqdm import tqdm
+try:  # For using tqdm on Google Colab
+  import google.colab
+  IN_COLAB = True
+  from tqdm import tqdm_notebook as tqdm
+except:
+  IN_COLAB = False
+  from tqdm import tqdm
 import numpy as np
 from PIL import Image
 from PIL.ExifTags import TAGS

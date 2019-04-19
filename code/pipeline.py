@@ -3,7 +3,7 @@ import warnings
 import pickle
 import matplotlib.pyplot as plt
 import cv2
-try:
+try:  # For using tqdm on Google Colab
   import google.colab
   IN_COLAB = True
   from tqdm import tqdm_notebook as tqdm
@@ -49,6 +49,7 @@ class Pipeline:
         self.pipeline_dir = os.path.join(self.output_dir, 'pipeline')
         self.feature_extraction_dir = os.path.join(self.pipeline_dir, 'feature_extraction')
         self.feature_matching_dir = os.path.join(self.pipeline_dir, 'feature_matching')
+        self.geometric_verification_dir = os.path.join(self.pipeline_dir, 'geometric_verification')
 
         if not os.path.exists(self.pipeline_dir):
             os.mkdir(self.pipeline_dir)
@@ -56,6 +57,8 @@ class Pipeline:
             os.mkdir(self.feature_extraction_dir)
         if not os.path.exists(self.feature_matching_dir):
             os.mkdir(self.feature_matching_dir)
+        if not os.path.exists(self.geometric_verification_dir):
+            os.mkdir(self.geometric_verification_dir)
 
     def run(self):
         self._extract_features()  # extract features using SIFT
@@ -82,7 +85,6 @@ class Pipeline:
         images = Parallel(n_jobs=-1, backend='threading')(delayed(cv2.imread)(os.path.join(self.images_dir, img_filename), 0)
                                                             for img_filename in tqdm(img_filenames, desc='Loading images'))
 
-        # TODO add debug option to visualize
         if self.verbose and input("Visualize image loading? (y/n) ") == 'y':
             plt.imshow(images[0]), plt.show()
 
@@ -101,7 +103,8 @@ class Pipeline:
         return images, exif_data
 
     def _extract_features_impl(self):
-        pass
+        # TODO move implementation of feature extraction from feature_extraction.py to here
+        raise NotImplementedError
 
     def _extract_features(self):
         # TODO add check that self.n_keypoints and loaded keypoints agree
@@ -133,7 +136,7 @@ class Pipeline:
         index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)  # TODO set params differently?
         search_params = dict(checks=50)  # or pass empty dictionary
 
-        matcher = cv2.FlannBasedMatcher(index_params, search_params)  # cv2.BFMatcher()
+        matcher = cv2.FlannBasedMatcher(index_params, search_params)  # TODO use cv2.BFMatcher() ?
 
         # TODO upper triangular matrix of matches between all combinations of images
         image_matches = []
@@ -154,19 +157,13 @@ class Pipeline:
                     # Need to draw only good matches, so create a mask
                     matchesMask = [[1, 0] for _ in range(len(matches))]
 
-                    # TODO remove
-                    # ratio test as per Lowe's paper
-                    # for k, (m, n) in enumerate(matches):
-                    #     if m.distance < 0.75 * n.distance:  # TODO do we still want to filter out these? e.g. for bike, many useful points map to many others so they won't be included
-                    #         matchesMask[k] = [1, 0]
-
                     i_with_j_matches = []
                     for match, matchMask in zip(matches, matchesMask):
                         if matchMask[0]:
                             i_with_j_matches.append(match[0])
 
+                    # TODO add debug option to visualize
                     if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
-                        # TODO add debug option to visualize
                         img1 = self.images[i]
                         img2 = self.images[j]
 
@@ -233,25 +230,25 @@ class Pipeline:
         pts1 = np.array([self.keypoints_and_descriptors[i][0][match.queryIdx].pt for match in self.matches[i][j]])
         pts2 = np.array([self.keypoints_and_descriptors[j][0][match.trainIdx].pt for match in self.matches[i][j]])
 
-        # TODO opencv does normalization
-        # normalization matrices for the points with
-        T = None
-        T_prime = None
-
         # TODO
         exif_data1 = self.exif_data[i]
         exif_data2 = self.exif_data[j]
 
         height, width = exif_data1['ExifImageHeight'], exif_data1['ExifImageWidth']
 
-        # TODO do our own implementation
         # ransacReprojThreshold: threshold for inliers, 1-3 recommended by OpenCV documentation
         #                        0.006*max(img dimensions) recommended by Bundler Paper
         # confidence: desired probability that the estimated matrix is correct
         F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, method=cv2.FM_RANSAC,
                                                  ransacReprojThreshold=0.001*max(height, width), confidence=0.999)
 
+        # TODO extra RANSAC stage to make sure F is correct and not prone to outliers
         self.gv_matches[i][j] = inliers_mask.ravel() == 1
+        self.scene_graph[i][j] = np.sum(inliers_mask)
+        # Scene graph is undirected so j,i and i,j have same weight
+        self.scene_graph[j][i] = self.scene_graph[i][j]
+        # TODO get E from exif data and F
+        self.E_matrices = None # TODO Choose correct configuration here?
 
         gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
         gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
@@ -259,41 +256,44 @@ class Pipeline:
         K1 = get_K_from_exif(exif_data1)
         K2 = get_K_from_exif(exif_data2)
 
-        if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
-            visualize_gv(K1, K2, F, gv_pts1, gv_pts2)
-            im1, im2 = self.images[i], self.images[j]
-
-
-        # self.visualize_matches(i, j)
-        # self.visualize_matches(i, j, inliers_mask.ravel())
-        # TODO incorrect epipolar lines?
-        # draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
-
         # TODO add a debug option for visualization
+        if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
+            im1, im2 = self.images[i], self.images[j]
+            # self.visualize_matches(i, j)
+            # self.visualize_matches(i, j, inliers_mask.ravel())
+            # TODO incorrect epipolar lines?
+            draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
 
-        # TODO get E from exif data and F
+            visualize_gv(K1, K2, F, gv_pts1, gv_pts2)
 
     def _geometric_verification(self):
-        # a weighted adjacency list where an edge's weight is indicated
-        # by the number of geometrically verified matches the two images share
-        self.scene_graph = [[0 for _ in range(self.num_images)] for _ in range(self.num_images)]
+        pickled_gv = os.path.join(self.geometric_verification_dir, 'geometric_verification.pkl')
+        if os.path.exists(pickled_gv):
+            with open(pickled_gv, 'rb') as f:
+                self.scene_graph, self.E_matrices, self.gv_matches = pickle.load(f)
+        else:
+            # a weighted adjacency list where an edge's weight is indicated
+            # by the number of geometrically verified matches the two images share
+            self.scene_graph = [[0 for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        # E matrices between all image combinations
-        # None when images don't share an edge
-        self.essential_matrices = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
+            # E matrices between all image combinations
+            # None when images don't share an edge
+            self.E_matrices = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        # geometrically verified matches stored as inlier masks
-        self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
+            # geometrically verified matches stored as inlier masks
+            self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        ij_combs = list(combinations(range(self.num_images), 2))
-        Parallel(n_jobs=1, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
-                for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
+            ij_combs = list(combinations(range(self.num_images), 2))
+            Parallel(n_jobs=-1, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
+                    for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
 
-        raise NotImplementedError
+            with open(pickled_gv, 'wb') as f:
+                pickle.dump((self.scene_graph, self.E_matrices, self.gv_matches), f)
 
     def _init_reconstruction(self):
         # start at the image which has the highest weighted edges
         # pick it and the image it shares the highest weighted edge with as the first images to register
+        print(np.argmax(self.scene_graph))
         raise NotImplementedError
 
     def _reconstruct3d(self):
