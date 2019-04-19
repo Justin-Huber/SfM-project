@@ -5,8 +5,6 @@ import numpy as np
 from PIL import Image
 from PIL.ExifTags import TAGS
 
-NUM_KEYPOINTS = 100
-
 
 def get_human_readable_exif(filename):
     """
@@ -55,7 +53,7 @@ def deserialize_keypoints(array):
     return keypoints, np.array(descriptors)
 
 
-def pickleable_detect_and_compute(img):
+def pickleable_detect_and_compute(img, n_keypoints):
     """
     Wrapper function for sift.detectAndCompute which uses pickleable keypoints
     by serializing the keypoints
@@ -64,12 +62,12 @@ def pickleable_detect_and_compute(img):
     :return: returns a tuple of the serialized keypoint and descriptor
     """
     # Initiate SIFT detector
-    sift = cv2.xfeatures2d.SIFT_create(NUM_KEYPOINTS)
+    sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
     kp, des = sift.detectAndCompute(img, None)
     return serialize_keypoints(kp, des)
 
 
-def populate_keypoints_and_descriptors(images):
+def populate_keypoints_and_descriptors(images, n_keypoints):
     """
 
     :param images: list of images as numpy arrays
@@ -79,8 +77,7 @@ def populate_keypoints_and_descriptors(images):
     # Initiate SIFT detector
     # find the keypoints and descriptors with SIFT
     # TODO not parallel?
-    kps_and_des = Parallel(n_jobs=-1)(delayed(pickleable_detect_and_compute)(img) for img in
-                            tqdm(images, desc='Extracting features and descriptors'))
-
+    kps_and_des = Parallel(n_jobs=-1)(delayed(pickleable_detect_and_compute)(img, n_keypoints)
+                                        for img in tqdm(images, desc='Extracting features and descriptors'))
     # TODO add debug option to visualize
     return kps_and_des

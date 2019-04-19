@@ -3,16 +3,22 @@ import warnings
 import pickle
 import matplotlib.pyplot as plt
 import cv2
-from tqdm import tqdm
+try:
+  import google.colab
+  IN_COLAB = True
+  from tqdm import tqdm_notebook as tqdm
+except:
+  IN_COLAB = False
+  from tqdm import tqdm
+
 from sklearn.externals.joblib import Parallel, delayed
 import time
 from itertools import combinations
 import numpy as np
 
-# import globals
 from feature_extraction import get_human_readable_exif, populate_keypoints_and_descriptors, deserialize_keypoints
 from feature_matching import serialize_matches, deserialize_matches
-from geometric_verification import draw_epipolar
+from geometric_verification import draw_epipolar, get_K_from_exif, visualize_gv
 
 
 class Pipeline:
@@ -20,7 +26,7 @@ class Pipeline:
     A SfM Pipeline for reconstructing a 3D scene from a set of 2D images.
 
     """
-    def __init__(self, images_dir, output_dir=os.path.abspath(os.path.join(os.getcwd(), '..')), **kwargs):
+    def __init__(self, images_dir, output_dir=os.path.abspath(os.path.join(os.getcwd(), '..')), n_keypoints=100, **kwargs):
         """
 
         :param images_dir: directory containing set of 2D images
@@ -29,6 +35,7 @@ class Pipeline:
         """
         self.images_dir = images_dir
         self.output_dir = output_dir
+        self.n_keypoints = n_keypoints
         self._init_pipeline_file_structure()
         self.verbose = kwargs.pop('verbose', False)
 
@@ -98,7 +105,11 @@ class Pipeline:
 
         return images, exif_data
 
+    def _extract_features_impl(self):
+        pass
+
     def _extract_features(self):
+        # TODO add check that self.n_keypoints and loaded keypoints agree
         self.images, self.exif_data = self._load_images()
         self.num_images = len(self.images)
 
@@ -107,7 +118,7 @@ class Pipeline:
             with open(pickled_keypoints, 'rb') as f:
                 self.keypoints_and_descriptors = pickle.load(f)
         else:
-            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(self.images)
+            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(self.images, self.n_keypoints)
             with open(pickled_keypoints, 'wb') as f:
                 pickle.dump(self.keypoints_and_descriptors, f)
 
@@ -224,28 +235,42 @@ class Pipeline:
     def _geometric_verification_impl(self, i, j):
         # TODO multithreading accessing a list, how does it work?
         # TODO check that GIL isn't preventing parallelism
-        pts1 = np.array([self.keypoints_and_descriptors[i][0][match.trainIdx].pt for match in self.matches[i][j]])
-        pts2 = np.array([self.keypoints_and_descriptors[j][0][match.queryIdx].pt for match in self.matches[i][j]])
+        pts1 = np.array([self.keypoints_and_descriptors[i][0][match.queryIdx].pt for match in self.matches[i][j]])
+        pts2 = np.array([self.keypoints_and_descriptors[j][0][match.trainIdx].pt for match in self.matches[i][j]])
 
         # TODO opencv does normalization
         # normalization matrices for the points with
         T = None
         T_prime = None
 
+        # TODO
+        exif_data1 = self.exif_data[i]
+        exif_data2 = self.exif_data[j]
+
+        height, width = exif_data1['ExifImageHeight'], exif_data1['ExifImageWidth']
+
         # TODO do our own implementation
         # ransacReprojThreshold: threshold for inliers, 1-3 recommended by OpenCV documentation
+        #                        0.006*max(img dimensions) recommended by Bundler Paper
         # confidence: desired probability that the estimated matrix is correct
-        F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, method=cv2.FM_RANSAC, ransacReprojThreshold=10, confidence=0.999)
+        F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, method=cv2.FM_RANSAC,
+                                                 ransacReprojThreshold=0.001*max(height, width), confidence=0.999)
         im1, im2 = self.images[i], self.images[j]
         gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
         gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
 
-        self.visualize_matches(i, j)
-        self.visualize_matches(i, j, inliers_mask.ravel())
+        # self.visualize_matches(i, j)
+        # self.visualize_matches(i, j, inliers_mask.ravel())
         # TODO incorrect epipolar lines?
-        draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
+        # draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
 
         # TODO add a debug option for visualization
+
+        K1 = get_K_from_exif(exif_data1)
+        K2 = get_K_from_exif(exif_data2)
+        if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
+            visualize_gv(K1, K2, F, gv_pts1, gv_pts2)
+
         # TODO get E from exif data and F
 
     def _geometric_verification(self):
@@ -276,13 +301,8 @@ class Pipeline:
 
 
 if __name__ == '__main__':
-    # TODO may not be necessary
-    # globals.init('../datasets/Bicycle/images/')
-
     with warnings.catch_warnings():  # TODO how to not display dep warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        pipeline = Pipeline('../datasets/Bicycle/images/', verbose=False)
+        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=False)
         pipeline.run()
-
-        # globals.pipeline.run()
