@@ -293,7 +293,23 @@ class Pipeline:
     def _init_reconstruction(self):
         # start at the image which has the highest weighted edges
         # pick it and the image it shares the highest weighted edge with as the first images to register
+
+        print("HERE")
+        print("SELF.SCENE_GRAPH", self.scene_graph)
+        self.scene_graph = np.array(self.scene_graph)
+        print("scene graph shape", self.scene_graph.shape)
+        dense_img_inx = -1
+        max_total_inliers = 0
+        for i in range(self.scene_graph.shape[0]):
+            cur_total_inliers = np.sum(self.scene_graph[i])
+            if cur_total_inliers > max_total_inliers:
+                max_total_inliers = cur_total_inliers
+                dense_img_inx = i
+
         print(np.argmax(self.scene_graph))
+        raise NotImplementedError
+
+    def _register_img(self, i):
         raise NotImplementedError
 
     def _reconstruct3d(self):
