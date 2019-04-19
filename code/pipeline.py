@@ -15,6 +15,7 @@ from sklearn.externals.joblib import Parallel, delayed
 import time
 from itertools import combinations
 import numpy as np
+import networkx as nx
 
 from feature_extraction import get_human_readable_exif, populate_keypoints_and_descriptors, deserialize_keypoints
 from feature_matching import serialize_matches, deserialize_matches
@@ -38,6 +39,7 @@ class Pipeline:
         self.n_keypoints = n_keypoints
         self._init_pipeline_file_structure()
         self.verbose = kwargs.pop('verbose', False)
+        self.gv_threshold = kwargs.pop('gv_threshold', 20)
 
         # check valid image dir
         self.images = []
@@ -244,11 +246,11 @@ class Pipeline:
 
         # TODO extra RANSAC stage to make sure F is correct and not prone to outliers
         self.gv_matches[i][j] = inliers_mask.ravel() == 1
-        self.scene_graph[i][j] = np.sum(inliers_mask)
+        self.scene_graph[i, j] = np.sum(inliers_mask)
         # Scene graph is undirected so j,i and i,j have same weight
-        self.scene_graph[j][i] = self.scene_graph[i][j]
+        self.scene_graph[j, i] = self.scene_graph[i, j]
         # TODO get E from exif data and F
-        self.E_matrices = None # TODO Choose correct configuration here?
+        self.E_matrices[i][j] = None # TODO Choose correct configuration here?
 
         gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
         gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
@@ -274,7 +276,7 @@ class Pipeline:
         else:
             # a weighted adjacency list where an edge's weight is indicated
             # by the number of geometrically verified matches the two images share
-            self.scene_graph = [[0 for _ in range(self.num_images)] for _ in range(self.num_images)]
+            self.scene_graph = np.zeros((self.num_images, self.num_images))
 
             # E matrices between all image combinations
             # None when images don't share an edge
@@ -291,6 +293,8 @@ class Pipeline:
                 pickle.dump((self.scene_graph, self.E_matrices, self.gv_matches), f)
 
     def _init_reconstruction(self):
+        # TODO prune pairs with not enough verified matches
+        self.scene_graph[self.scene_graph < self.gv_threshold] = 0
         # start at the image which has the highest weighted edges
         # pick it and the image it shares the highest weighted edge with as the first images to register
 
@@ -306,13 +310,32 @@ class Pipeline:
                 max_total_inliers = cur_total_inliers
                 dense_img_inx = i
 
-        print(np.argmax(self.scene_graph))
-        raise NotImplementedError
+        if self.verbose:
+            # TODO add visualization of scene graph
+            G = nx.from_numpy_matrix(np.array(self.scene_graph))
+            nx.draw(G)
+            plt.show()
+
+        print(np.sum(self.scene_graph, axis=1))
+        i = np.argmax(np.sum(self.scene_graph, axis=1))
+        j = np.argmax(self.scene_graph[i])
+
+        print(i, j)
+
+        # TODO register i, j together
 
     def _register_img(self, i):
+        """
+        Registers an image into the 3D reconstruction by adding its unregistered points into the point cloud
+        :param i: index of image i
+        :return:
+        """
         raise NotImplementedError
 
     def _reconstruct3d(self):
+        self.point_cloud = []  # list of 3d points in the scene
+        self.feature_in_point_cloud = [[]]  #
+
         raise NotImplementedError
 
 
@@ -320,5 +343,5 @@ if __name__ == '__main__':
     with warnings.catch_warnings():  # TODO how to not display dep warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=False)
+        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=True)
         pipeline.run()

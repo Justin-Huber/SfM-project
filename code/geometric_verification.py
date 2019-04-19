@@ -68,54 +68,7 @@ from skimage.transform import FundamentalMatrixTransform
 from skimage import img_as_ubyte
 
 
-def findFundamentalMat(im1, im2, pts1, pts2, eig_then_svd=False):
-    ones = np.ones((pts1.shape[0], 1))
-    homog_pts1 = np.append(pts1, ones, axis=1)
-    homog_pts2 = np.append(pts2, ones, axis=1)
-
-    T = np.diag(np.ones(homog_pts1.shape[1]) / np.max(im1.shape))
-    T[-1, -1] = 1
-    T_prime = np.diag(np.ones(homog_pts2.shape[1]) / np.max(im2.shape))
-    T_prime[-1, -1] = 1
-
-    # mean1 = np.mean(pts1, axis=0)
-    # mean2 = np.mean(pts2, axis=0)
-    # T = np.diag(np.ones(homog_pts1.shape[1]))
-    # T[0, 2] = -mean1[1]
-    # T[1, 2] = -mean1[0]
-    # T_prime = np.diag(np.ones(homog_pts2.shape[1]))
-    # T_prime[0, 2] = -mean2[1]
-    # T_prime[1, 2] = -mean2[0]
-
-    pts1_norm = homog_pts1.dot(T)
-    pts2_norm = homog_pts2.dot(T_prime)
-
-    A = np.array(
-        [(pt1.reshape(1, *pt1.shape) * pt2.reshape(*pt2.shape, 1)).flatten() for pt1, pt2 in zip(pts1_norm, pts2_norm)])
-
-    if eig_then_svd:
-        eig_vals, eig_vecs = np.linalg.eig(A.T.dot(A))
-        idx = np.argmin(eig_vals)
-        F = eig_vecs[:, idx].reshape(3, 3)
-    else:
-        U, SIGMA, V_T = np.linalg.svd(A.T @ A, full_matrices=True)
-        F = V_T[8].reshape(3, 3)
-
-    U, SIGMA, V_T = np.linalg.svd(F, full_matrices=True)
-    SIGMA[2:] = 0
-    F = U @ np.diag(SIGMA) @ V_T
-    F /= F[2, 2]
-    F = T_prime.T @ F @ T
-
-    return F
-
-
-
-
 def findPointCloud(K1, K2, R, t, pts1, pts2):
-    #####################################################################
-    # 4
-    #####################################################################
     I = np.diag(np.ones(R.shape[1]))
     I_zeros = np.append(I, np.zeros((I.shape[0], 1)), axis=1)
     R_t = np.append(R, t, axis=1)
@@ -123,9 +76,6 @@ def findPointCloud(K1, K2, R, t, pts1, pts2):
     P1 = K1 @ I_zeros
     P2 = K2 @ R_t
 
-    #####################################################################
-    # 5
-    #####################################################################
     X = cv2.triangulatePoints(P1[:3], P2[:3], pts1.T.astype(float), pts2.T.astype(float))
     X /= X[3]
 
@@ -163,7 +113,6 @@ def visualize_gv(K1, K2, F, pts1, pts2):
 
         if tmp.shape[1] > X.shape[1]:
             X = tmp
-        # visualize_pcd(tmp[:3].astype(float).T)
 
     visualize_pcd(X[:3].astype(float).T)
 
@@ -210,7 +159,7 @@ if __name__ == '__main__':
     # file2 = '../data/im2.png'
     visualize_all_matches = False
     visualize_good_matches = False
-    visualize_8pt = False
+    visualize_epipoles = False
 
     n_keypoints = 8000
 
@@ -297,7 +246,7 @@ if __name__ == '__main__':
     CV8_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right,
                                          method=cv2.FM_8POINT)
     print('CV8 F: ', CV8_F)
-    if visualize_8pt:
+    if visualize_epipoles:
         draw_epipolar(img_left, img_right,
                       CV8_F,
                       inlier_keypoints_left, inlier_keypoints_right)
