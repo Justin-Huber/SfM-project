@@ -313,6 +313,9 @@ if __name__ == '__main__':
     # Create F matrices
     CV8_F, mask = cv2.findFundamentalMat(sampled_kp_left, sampled_kp_right, method=cv2.FM_8POINT)
 
+    CV8_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right,
+                                         method=cv2.FM_8POINT)
+
     # Draw 3D
     from feature_extraction import get_human_readable_exif
     exif_data1 = get_human_readable_exif(file1)

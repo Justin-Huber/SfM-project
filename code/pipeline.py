@@ -57,17 +57,12 @@ class Pipeline:
         if not os.path.exists(self.feature_matching_dir):
             os.mkdir(self.feature_matching_dir)
 
-    def run(self, stage=0):
-        if stage == 0:
-            self._extract_features()  # extract features using SIFT
-        if stage < 1:
-            self._match_features()  # match features using FLANN (TODO decide)
-        if stage < 2:
-            self._geometric_verification()
-        if stage < 3:
-            self._init_reconstruction()
-        if stage < 4:
-            self._reconstruct3d()
+    def run(self):
+        self._extract_features()  # extract features using SIFT
+        self._match_features()  # match features using FLANN (TODO decide)
+        self._geometric_verification()
+        self._init_reconstruction()
+        self._reconstruct3d()
         raise NotImplementedError
 
     def _load_images_impl(self):
@@ -255,9 +250,19 @@ class Pipeline:
         # confidence: desired probability that the estimated matrix is correct
         F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, method=cv2.FM_RANSAC,
                                                  ransacReprojThreshold=0.001*max(height, width), confidence=0.999)
-        im1, im2 = self.images[i], self.images[j]
+
+        self.gv_matches[i][j] = inliers_mask.ravel() == 1
+
         gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
         gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
+
+        K1 = get_K_from_exif(exif_data1)
+        K2 = get_K_from_exif(exif_data2)
+
+        if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
+            visualize_gv(K1, K2, F, gv_pts1, gv_pts2)
+            im1, im2 = self.images[i], self.images[j]
+
 
         # self.visualize_matches(i, j)
         # self.visualize_matches(i, j, inliers_mask.ravel())
@@ -265,11 +270,6 @@ class Pipeline:
         # draw_epipolar(im1, im2, F, gv_pts1, gv_pts2)
 
         # TODO add a debug option for visualization
-
-        K1 = get_K_from_exif(exif_data1)
-        K2 = get_K_from_exif(exif_data2)
-        if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
-            visualize_gv(K1, K2, F, gv_pts1, gv_pts2)
 
         # TODO get E from exif data and F
 
@@ -282,7 +282,7 @@ class Pipeline:
         # None when images don't share an edge
         self.essential_matrices = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
-        # geometrically verified matches TODO mask? yes
+        # geometrically verified matches stored as inlier masks
         self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
         ij_combs = list(combinations(range(self.num_images), 2))
