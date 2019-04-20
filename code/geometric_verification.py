@@ -101,7 +101,25 @@ def visualize_pcd(points):
     open3d.draw_geometries([pcd])
 
 
-def visualize_gv(K1, K2, F, pts1, pts2):
+def get_best_configuration(K1, K2, F, pts1, pts2):
+    E = K2.T @ F @ K1
+
+    R1, R2, t = cv2.decomposeEssentialMat(E)
+
+    X = np.array(([0], [0]))
+
+    best_config = None
+    for args in [[R1, t], [R1, -t], [R2, t], [R2, -t]]:
+        tmp = findPointCloud(K1, K2, *args, pts1, pts2)
+
+        if tmp.shape[1] > X.shape[1]:
+            X = tmp
+            best_config = args
+
+    return best_config
+
+
+def visualize_gv_from_F(K1, K2, F, pts1, pts2):
     E = K2.T @ F @ K1
 
     R1, R2, t = cv2.decomposeEssentialMat(E)
@@ -114,6 +132,11 @@ def visualize_gv(K1, K2, F, pts1, pts2):
         if tmp.shape[1] > X.shape[1]:
             X = tmp
 
+    visualize_pcd(X[:3].astype(float).T)
+
+
+def visualize_gv(K1, K2, R, t, pts1, pts2):
+    X = findPointCloud(K1, K2, R, t, pts1, pts2)
     visualize_pcd(X[:3].astype(float).T)
 
 
@@ -150,36 +173,81 @@ def visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, m
     plt.imshow(img), plt.show()
 
 
-if __name__ == '__main__':
-    # TODO pixel bug?
-    np.random.seed(0)
-    file1 = '../datasets/Bicycle/images/0000.jpg'
-    file2 = '../datasets/Bicycle/images/0002.jpg'
-    # file1 = '../data/im1.png'
-    # file2 = '../data/im2.png'
-    visualize_all_matches = False
-    visualize_good_matches = False
-    visualize_epipoles = False
-
-    n_keypoints = 8000
-
-    import time
+import time
+def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
     start_time = time.time()
     # Find sparse feature correspondences between left and right image.
     im1 = cv2.imread(file1, 0)
     im2 = cv2.imread(file2, 0)
 
-    sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
-    kp1, des1 = sift.detectAndCompute(im1, None)
-    kp2, des2 = sift.detectAndCompute(im2, None)
-    # FLANN parameters
-    FLANN_INDEX_KDTREE = 0
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)  # TODO set params differently?
-    search_params = dict(checks=50)  # or pass empty dictionary
-    matcher = cv2.FlannBasedMatcher(index_params, search_params)  # cv2.BFMatcher()
-    cv_matches = matcher.knnMatch(des1, des2, k=2)
+    # sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
+    # kp1, des1 = sift.detectAndCompute(im1, None)
+    # kp2, des2 = sift.detectAndCompute(im2, None)
+
+    orb = cv2.ORB_create(n_keypoints)
+    kp1, des1 = orb.detectAndCompute(im1, None)
+    kp2, des2 = orb.detectAndCompute(im2, None)
+
+    pts1 = np.array([kp.pt for kp in kp1])
+    pts2 = np.array([kp.pt for kp in kp2])
+
+    # # FLANN parameters
+    # FLANN_INDEX_KDTREE = 0
+    # index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)  # TODO set params differently?
+    # search_params = dict(checks=50)  # or pass empty dictionary
+    # matcher = cv2.FlannBasedMatcher(index_params, search_params)
+    # cv_matches = matcher.knnMatch(des1, des2, k=2)
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    cv_matches = bf.match(des1, des2)
+    cv_matches = np.array(cv_matches)
+    matches = np.array([(match.queryIdx, match.trainIdx) for match in cv_matches])
     cv_end_time = time.time()
 
+    print('CV Runtime: ', cv_end_time - start_time)
+
+    print("Number of matches:", len(cv_matches))
+
+    F, inliers_mask = cv2.findFundamentalMat(pts1[matches[:, 0]],
+                                             pts2[matches[:, 1]],
+                                             method=cv2.FM_RANSAC,
+                                             ransacReprojThreshold=0.001 * max(im1.shape),
+                                             confidence=0.999)
+
+    print("Number of inliers:", inliers_mask.sum())
+
+    inliers_mask = inliers_mask.ravel() == 1
+
+    inlier_pts1 = pts1[matches[inliers_mask, 0]]
+    inlier_pts1 = inlier_pts1.astype(int)
+    inlier_pts2 = pts2[matches[inliers_mask, 1]]
+    inlier_pts2 = inlier_pts2.astype(int)
+
+    if visualize_all_matches:
+        img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+        plt.imshow(img), plt.show()
+
+    if visualize_good_matches:
+        img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+        plt.imshow(img), plt.show()
+
+    if visualize_epipoles:
+        draw_epipolar(im1, im2, F, inlier_pts1, inlier_pts2)
+
+    # Draw 3D
+    from feature_extraction import get_human_readable_exif
+    exif_data1 = get_human_readable_exif(file1)
+    exif_data2 = get_human_readable_exif(file2)
+
+    # TODO ask about this
+    K1 = get_K_from_exif(exif_data1)
+    K2 = get_K_from_exif(exif_data2)
+
+    visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
+
+def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
+    start_time = time.time()
+    # Find sparse feature correspondences between left and right image.
     img_left, img_right = io.imread(file1), io.imread(file2)
     img_left, img_right = map(rgb2gray, (img_left, img_right))
 
@@ -196,11 +264,7 @@ if __name__ == '__main__':
                                 cross_check=True)
     sk_end_time = time.time()
 
-    print('Start time: ', start_time)
-    print('CV End time: ', cv_end_time)
-    print('SK End time: ', sk_end_time)
-    print('CV Runtime: ', cv_end_time - start_time)
-    print('SK Runtime: ', sk_end_time - cv_end_time)
+    print('SK Runtime: ', sk_end_time - start_time)
 
     print("Number of matches:", matches.shape[0])
 
@@ -215,18 +279,10 @@ if __name__ == '__main__':
                             FundamentalMatrixTransform, min_samples=8,
                             residual_threshold=0.001*max(img_left.shape), max_trials=5000)
 
-    F, mask = cv2.findFundamentalMat(keypoints_left[matches[:, 0]],
-                                    keypoints_right[matches[:, 1]],
-                                    method=cv2.FM_RANSAC,
-                                    ransacReprojThreshold=0.001 * max(img_left.shape),
-                                    confidence=0.999)
-
     print("Number of inliers:", inliers.sum())
 
-    mask_as_bool = mask.squeeze().astype(bool)
     if visualize_good_matches:
         visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, matches, inliers)
-        visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, matches, mask_as_bool)
 
     inlier_keypoints_left = keypoints_left[matches[inliers, 0]]
     inlier_keypoints_left = inlier_keypoints_left.astype(int)
@@ -234,13 +290,6 @@ if __name__ == '__main__':
     inlier_keypoints_right = keypoints_right[matches[inliers, 1]]
     inlier_keypoints_right = inlier_keypoints_right.astype(int)
     inlier_keypoints_right = np.array([(x, y) for (y, x) in inlier_keypoints_right])
-
-    mask_keypoints_left = keypoints_left[matches[mask_as_bool, 0]]
-    mask_keypoints_left = mask_keypoints_left.astype(int)
-    mask_keypoints_left = np.array([(x, y) for (y, x) in mask_keypoints_left])
-    mask_keypoints_right = keypoints_right[matches[mask_as_bool, 1]]
-    mask_keypoints_right = mask_keypoints_right.astype(int)
-    mask_keypoints_right = np.array([(x, y) for (y, x) in mask_keypoints_right])
 
     # TODO how to properly select
     CV8_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right,
@@ -250,9 +299,6 @@ if __name__ == '__main__':
         draw_epipolar(img_left, img_right,
                       CV8_F,
                       inlier_keypoints_left, inlier_keypoints_right)
-        draw_epipolar(img_left, img_right,
-                      F,
-                      mask_keypoints_left, mask_keypoints_right)
 
     sample_from = np.random.choice(inlier_keypoints_left.shape[0], 20)
     sampled_kp_left = inlier_keypoints_left[sample_from, :]
@@ -281,5 +327,20 @@ if __name__ == '__main__':
     K1 = get_K_from_exif(exif_data1)
     K2 = get_K_from_exif(exif_data2)
 
-    visualize_gv(K1, K2, CV8_F, inlier_keypoints_left, inlier_keypoints_right)
-    visualize_gv(K1, K2, CV8_F, mask_keypoints_left, mask_keypoints_right)
+    visualize_gv_from_F(K1, K2, CV8_F, inlier_keypoints_left, inlier_keypoints_right)
+
+
+if __name__ == '__main__':
+    file1 = '../datasets/Bicycle/images/0000.jpg'
+    file2 = '../datasets/Bicycle/images/0002.jpg'
+
+    visualize_all_matches = False
+    visualize_good_matches = False
+    visualize_epipoles = False
+
+    n_keypoints = 8000
+
+    np.random.seed(0)
+
+    cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)
+    sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)

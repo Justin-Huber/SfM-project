@@ -19,7 +19,7 @@ import networkx as nx
 
 from feature_extraction import get_human_readable_exif, populate_keypoints_and_descriptors, deserialize_keypoints
 from feature_matching import serialize_matches, deserialize_matches
-from geometric_verification import draw_epipolar, get_K_from_exif, visualize_gv
+from geometric_verification import draw_epipolar, get_K_from_exif, visualize_gv, get_best_configuration
 
 
 class Pipeline:
@@ -238,9 +238,11 @@ class Pipeline:
 
         height, width = exif_data1['ExifImageHeight'], exif_data1['ExifImageWidth']
 
-        # ransacReprojThreshold: threshold for inliers, 1-3 recommended by OpenCV documentation
-        #                        0.006*max(img dimensions) recommended by Bundler Paper
-        # confidence: desired probability that the estimated matrix is correct
+        # Args:
+        # - ransacReprojThreshold: threshold for inliers
+        #                            1-3 recommended by OpenCV documentation
+        #                            0.006*max(img dimensions) recommended by Bundler Paper
+        # - confidence: desired probability that the estimated matrix is correct
         F, inliers_mask = cv2.findFundamentalMat(pts1, pts2, method=cv2.FM_RANSAC,
                                                  ransacReprojThreshold=0.001*max(height, width), confidence=0.999)
 
@@ -249,14 +251,15 @@ class Pipeline:
         self.scene_graph[i, j] = np.sum(inliers_mask)
         # Scene graph is undirected so j,i and i,j have same weight
         self.scene_graph[j, i] = self.scene_graph[i, j]
-        # TODO get E from exif data and F
-        self.E_matrices[i][j] = None # TODO Choose correct configuration here?
 
         gv_pts1 = pts1[inliers_mask.ravel() == 1].astype(int)
         gv_pts2 = pts2[inliers_mask.ravel() == 1].astype(int)
 
         K1 = get_K_from_exif(exif_data1)
         K2 = get_K_from_exif(exif_data2)
+
+        # TODO get E from exif data and F
+        self.im2im_configs[i][j] = get_best_configuration(K1, K2, F, gv_pts1, gv_pts2)
 
         # TODO add a debug option for visualization
         if self.verbose and input("Visualize matches impl? (y/n) ") == 'y':
@@ -272,15 +275,15 @@ class Pipeline:
         pickled_gv = os.path.join(self.geometric_verification_dir, 'geometric_verification.pkl')
         if os.path.exists(pickled_gv):
             with open(pickled_gv, 'rb') as f:
-                self.scene_graph, self.E_matrices, self.gv_matches = pickle.load(f)
+                self.scene_graph, self.im2im_configs, self.gv_matches = pickle.load(f)
         else:
             # a weighted adjacency list where an edge's weight is indicated
             # by the number of geometrically verified matches the two images share
             self.scene_graph = np.zeros((self.num_images, self.num_images))
 
-            # E matrices between all image combinations
+            # R, t matrices between all image combinations
             # None when images don't share an edge
-            self.E_matrices = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
+            self.im2im_configs = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
             # geometrically verified matches stored as inlier masks
             self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
@@ -290,39 +293,38 @@ class Pipeline:
                     for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
 
             with open(pickled_gv, 'wb') as f:
-                pickle.dump((self.scene_graph, self.E_matrices, self.gv_matches), f)
+                pickle.dump((self.scene_graph, self.im2im_configs, self.gv_matches), f)
 
     def _init_reconstruction(self):
-        # TODO prune pairs with not enough verified matches
+        # prune pairs that don't have enough verified matches
         self.scene_graph[self.scene_graph < self.gv_threshold] = 0
-        # start at the image which has the highest weighted edges
-        # pick it and the image it shares the highest weighted edge with as the first images to register
 
-        print("HERE")
-        print("SELF.SCENE_GRAPH", self.scene_graph)
-        self.scene_graph = np.array(self.scene_graph)
-        print("scene graph shape", self.scene_graph.shape)
-        dense_img_inx = -1
-        max_total_inliers = 0
-        for i in range(self.scene_graph.shape[0]):
-            cur_total_inliers = np.sum(self.scene_graph[i])
-            if cur_total_inliers > max_total_inliers:
-                max_total_inliers = cur_total_inliers
-                dense_img_inx = i
-
-        if self.verbose:
-            # TODO add visualization of scene graph
+        if self.verbose and input("Visualize Scene Graph? (y/n) ") == 'y':
             G = nx.from_numpy_matrix(np.array(self.scene_graph))
             nx.draw(G)
             plt.show()
 
-        print(np.sum(self.scene_graph, axis=1))
+        # start at the image which has the highest weighted edges
+        # pick it and the image it shares the highest weighted edge with as the first images to register
         i = np.argmax(np.sum(self.scene_graph, axis=1))
         j = np.argmax(self.scene_graph[i])
 
-        print(i, j)
+        i, j = sorted([i, j])
 
         # TODO register i, j together
+        # TODO visualize i, j in 3D
+        # TODO add a debug option for visualization
+        if self.verbose and input("Visualize initialization images? (y/n) ") == 'y':
+            i,j = 0,1
+            K1 = get_K_from_exif(self.exif_data[i])
+            K2 = get_K_from_exif(self.exif_data[j])
+            R, t = self.im2im_configs[i][j]
+            inliers_mask = self.gv_matches[i][j]
+            kps1 = np.array(self.keypoints_and_descriptors[i][0])[inliers_mask]
+            kps2 = np.array(self.keypoints_and_descriptors[j][0])[inliers_mask]
+            pts1 = np.array([kp.pt for kp in kps1])
+            pts2 = np.array([kp.pt for kp in kps2])
+            visualize_gv(K1, K2, R, t, pts1, pts2)
 
     def _register_img(self, i):
         """
