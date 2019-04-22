@@ -59,7 +59,25 @@ def get_K_from_exif(exif_data):
                       [0, 0, 1]])
 
 
-from skimage import data
+def compute_F_matrix_residual(F, pt1, pt2):
+    """
+    Estimates the distance between pt2 and the projected epipolar line created by F and pt1
+
+    :param F:
+    :param pt1:
+    :param pt2:
+    :return:
+    """
+
+    line2 = cv2.computeCorrespondEpilines(pt1.reshape(-1, 1, 2), 1, F)
+    line2 = line2.squeeze()
+    pt2 = cv2.convertPointsToHomogeneous(np.array([pt2]))
+    pt2 = pt2.squeeze()
+    dist = np.abs(line2.dot(pt2) / np.sqrt(line2[0]**2 + line2[1]**2))
+    return dist
+
+
+
 from skimage.color import rgb2gray
 from skimage.feature import match_descriptors, ORB, plot_matches
 from skimage.measure import ransac
@@ -97,7 +115,7 @@ def visualize_pcd(points):
     pcd = open3d.PointCloud()
     pcd.points = open3d.Vector3dVector(points)
     # Uncomment this line if you want to paint some color
-    # pcd.paint_uniform_color([0, 0, 1])
+    pcd.paint_uniform_color([0, 0, 1])
     open3d.draw_geometries([pcd])
 
 
@@ -126,18 +144,62 @@ def visualize_gv_from_F(K1, K2, F, pts1, pts2):
 
     X = np.array(([0], [0]))
 
+    best_R, best_t = None, None
     for args in [[R1, t], [R1, -t], [R2, t], [R2, -t]]:
         tmp = findPointCloud(K1, K2, *args, pts1, pts2)
 
         if tmp.shape[1] > X.shape[1]:
             X = tmp
+            best_R, best_t = args
 
     visualize_pcd(X[:3].astype(float).T)
+
+    return best_R, best_t
 
 
 def visualize_gv(K1, K2, R, t, pts1, pts2):
     X = findPointCloud(K1, K2, R, t, pts1, pts2)
-    visualize_pcd(X[:3].astype(float).T)
+
+    try:  # For visualizing 3D plots on Google Colab
+        import google.colab
+        IN_COLAB = True
+    except:
+        IN_COLAB = False
+
+    if IN_COLAB:
+        from plotly.offline import iplot
+        import plotly.graph_objs as go
+
+        import numpy as np
+
+        trace = go.Scatter3d(
+            x=X[0],
+            y=X[1],
+            z=X[2],
+            mode='markers',
+            marker=dict(
+                size=1,
+                line=dict(
+                    color='rgba(217, 217, 217, 0.14)',
+                    width=0.5
+                ),
+                opacity=0.8
+            )
+        )
+
+        data = [trace]
+        layout = go.Layout(
+            margin=dict(
+                l=0,
+                r=0,
+                b=0,
+                t=0
+            )
+        )
+
+        iplot(data)
+    else:
+        visualize_pcd(X[:3].astype(float).T)
 
 
 def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches):
@@ -208,20 +270,50 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 
     print("Number of matches:", len(cv_matches))
 
+    threshold = 0.001 * max(im1.shape)
     F, inliers_mask = cv2.findFundamentalMat(pts1[matches[:, 0]],
                                              pts2[matches[:, 1]],
                                              method=cv2.FM_RANSAC,
-                                             ransacReprojThreshold=0.001 * max(im1.shape),
+                                             ransacReprojThreshold=threshold,
                                              confidence=0.999)
 
     print("Number of inliers:", inliers_mask.sum())
-
     inliers_mask = inliers_mask.ravel() == 1
 
     inlier_pts1 = pts1[matches[inliers_mask, 0]]
     inlier_pts1 = inlier_pts1.astype(int)
     inlier_pts2 = pts2[matches[inliers_mask, 1]]
     inlier_pts2 = inlier_pts2.astype(int)
+
+    # inliers_mask_conf = np.zeros(len(inliers_mask))
+    #
+    # for i, match in enumerate(matches):
+    #     pt1 = pts1[match[0]]
+    #     pt2 = pts2[match[1]]
+    #     dist = compute_F_matrix_residual(F, pt1, pt2)
+    #     if dist < threshold:
+    #         inliers_mask_conf[i] = 1
+    #
+    # inliers_mask_conf = inliers_mask_conf == 1
+    #
+    # num_diff = 0
+    # for i, i_conf in zip(inliers_mask, inliers_mask_conf):
+    #     if i != i_conf:
+    #         num_diff += 1
+    #
+    # print('Number of inliers in disagreement: ', num_diff)
+    # # print('Number of inliers in disagreement: ', np.sum(inliers_mask != inliers_mask_conf))
+    #
+    # inlier_pts1 = pts1[matches[inliers_mask_conf, 0]]
+    # inlier_pts1 = inlier_pts1.astype(int)
+    # inlier_pts2 = pts2[matches[inliers_mask_conf, 1]]
+    # inlier_pts2 = inlier_pts2.astype(int)
+
+
+    # TODO optimize F according to the inliers
+
+    # TODO get inliers to optimized F
+
 
     if visualize_all_matches:
         img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
@@ -243,7 +335,9 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     K1 = get_K_from_exif(exif_data1)
     K2 = get_K_from_exif(exif_data2)
 
-    visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
+    R, t = visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
+    visualize_gv(K1, K2, R, t, inlier_pts1, inlier_pts2)
+
 
 def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
     start_time = time.time()
