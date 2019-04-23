@@ -1,3 +1,7 @@
+"""
+File containing all the helper functions for feature matching
+"""
+
 import cv2
 
 

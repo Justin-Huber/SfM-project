@@ -1,3 +1,7 @@
+"""
+File containing all the helper functions for feature extraction
+"""
+
 from sklearn.externals.joblib import Parallel, delayed
 import cv2
 try:  # For using tqdm on Google Colab
@@ -73,7 +77,7 @@ def pickleable_detect_and_compute(img, n_keypoints):
     return serialize_keypoints(kp, des)
 
 
-def populate_keypoints_and_descriptors(images, n_keypoints):
+def populate_keypoints_and_descriptors(images, n_keypoints, n_jobs):
     """
 
     :param images: list of images as numpy arrays
@@ -83,7 +87,7 @@ def populate_keypoints_and_descriptors(images, n_keypoints):
     # Initiate SIFT detector
     # find the keypoints and descriptors with SIFT
     # TODO not parallel?
-    kps_and_des = Parallel(n_jobs=-1)(delayed(pickleable_detect_and_compute)(img, n_keypoints)
+    kps_and_des = Parallel(n_jobs=n_jobs, backend='threading')(delayed(pickleable_detect_and_compute)(img, n_keypoints)
                                         for img in tqdm(images, desc='Extracting features and descriptors'))
     # TODO add debug option to visualize
     return kps_and_des

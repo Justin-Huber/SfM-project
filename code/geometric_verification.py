@@ -1,7 +1,12 @@
+"""
+File containing all the helper functions for geometric verification
+"""
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import open3d
+import random
 
 
 def drawlines(img1, img2, lines, pts1, pts2):
@@ -31,7 +36,7 @@ def draw_epipolar(img1, img2, F, pts1, pts2):
     plt.imshow(img5)
     plt.subplot(122)
     plt.imshow(img3)
-    plt.show()
+    plt.show(block=False)
 
 
 def get_K_from_exif(exif_data):
@@ -69,6 +74,10 @@ def compute_F_matrix_residual(F, pt1, pt2):
     :return:
     """
 
+    if F.shape != (3,3):
+        F = np.append(F, 1)
+        F = F.reshape((3,3))  # optimizer reshapes to (9,)
+
     line2 = cv2.computeCorrespondEpilines(pt1.reshape(-1, 1, 2), 1, F)
     line2 = line2.squeeze()
     pt2 = cv2.convertPointsToHomogeneous(np.array([pt2]))
@@ -76,6 +85,12 @@ def compute_F_matrix_residual(F, pt1, pt2):
     dist = np.abs(line2.dot(pt2) / np.sqrt(line2[0]**2 + line2[1]**2))
     return dist
 
+
+def F_matrix_residuals(F, inlier_pts1, inlier_pts2):
+    res = []
+    for pt1, pt2, in zip(inlier_pts1, inlier_pts2):
+        res.append(compute_F_matrix_residual(F, pt1, pt2))
+    return res
 
 
 from skimage.color import rgb2gray
@@ -202,6 +217,34 @@ def visualize_gv(K1, K2, R, t, pts1, pts2):
         visualize_pcd(X[:3].astype(float).T)
 
 
+def visualize_gt(obj_filename):
+    """
+    Function for visualizing the ground truth point cloud
+
+    :param obj_filename: filename for .obj file
+    :return:
+    """
+
+    x, y, z = [], [], []
+    with open(obj_filename, 'r') as f:
+        for line in f.readlines():
+            vals = line.split()
+            if len(vals) is 4:
+                t, x_i, y_i, z_i = vals
+
+                if t is 'v':
+                    x.append(x_i)
+                    y.append(y_i)
+                    z.append(z_i)
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+    z = np.asarray(z)
+
+    points = np.array([x, y, z])
+    visualize_pcd(points.astype(float).T)
+
+
 def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches):
     # Plot all
 
@@ -214,7 +257,8 @@ def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matc
     ax[0].axis("off")
     ax[0].set_title("Matches")
 
-    plt.show()
+    plt.show(block=False)
+
     plt.cla()
 
 
@@ -232,10 +276,14 @@ def visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, m
     cv_inlier_matches = cv_matches[inliers]
     img = cv2.drawMatches(img_left, cv_keypoints_left, img_right, cv_keypoints_right, cv_inlier_matches, None,
                           flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-    plt.imshow(img), plt.show()
+    plt.imshow(img), plt.show(block=False)
 
 
 import time
+from scipy.optimize import minimize, leastsq, least_squares
+global_pts1 = []
+global_pts2 = []
+
 def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
     start_time = time.time()
     # Find sparse feature correspondences between left and right image.
@@ -285,43 +333,63 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     inlier_pts2 = pts2[matches[inliers_mask, 1]]
     inlier_pts2 = inlier_pts2.astype(int)
 
-    # inliers_mask_conf = np.zeros(len(inliers_mask))
-    #
-    # for i, match in enumerate(matches):
-    #     pt1 = pts1[match[0]]
-    #     pt2 = pts2[match[1]]
-    #     dist = compute_F_matrix_residual(F, pt1, pt2)
-    #     if dist < threshold:
-    #         inliers_mask_conf[i] = 1
-    #
-    # inliers_mask_conf = inliers_mask_conf == 1
-    #
-    # num_diff = 0
-    # for i, i_conf in zip(inliers_mask, inliers_mask_conf):
-    #     if i != i_conf:
-    #         num_diff += 1
-    #
-    # print('Number of inliers in disagreement: ', num_diff)
-    # # print('Number of inliers in disagreement: ', np.sum(inliers_mask != inliers_mask_conf))
-    #
-    # inlier_pts1 = pts1[matches[inliers_mask_conf, 0]]
-    # inlier_pts1 = inlier_pts1.astype(int)
-    # inlier_pts2 = pts2[matches[inliers_mask_conf, 1]]
-    # inlier_pts2 = inlier_pts2.astype(int)
+    if visualize_good_matches:
+        img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+        plt.imshow(img), plt.show(block=False)
 
+    if visualize_epipoles:
+        draw_epipolar(im1, im2, F, inlier_pts1, inlier_pts2)
 
-    # TODO optimize F according to the inliers
+    global global_pts1
+    global global_pts2
+    global_pts1 = inlier_pts1
+    global_pts2 = inlier_pts2
+    # TODO optimize F according to the inliers using Levenberg-Marquardt
+    F, _ = leastsq(func=F_matrix_residuals, x0=F.flatten()[:-1].reshape(-1, 1), args=(inlier_pts1, inlier_pts2))
+
+    F = np.append(F, 1).reshape(3, 3)
+
+    # F = np.array([[-5.84679442e-07,  7.58216926e-06, - 3.29203581e-02],
+    #               [- 5.26880012e-06, 1.27287041e-07,  1.34151143e-01],
+    #               [3.36179919e-02, - 1.37881031e-01, 9.19840497e-01]])
+
+    U, SIGMA, V_T = np.linalg.svd(F)
+    SIGMA[2] = 0
+    F = U @ np.diag(SIGMA) @ V_T
+
+    print(F)
 
     # TODO get inliers to optimized F
+    inliers_mask_conf = np.zeros(len(inliers_mask))
 
+    for i, match in enumerate(matches):
+        pt1 = pts1[match[0]]
+        pt2 = pts2[match[1]]
+        dist = compute_F_matrix_residual(F, pt1, pt2)
+        if dist < threshold:
+            inliers_mask_conf[i] = 1
+
+    inliers_mask_conf = inliers_mask_conf == 1
+
+    num_diff = 0
+    for i, i_conf in zip(inliers_mask, inliers_mask_conf):
+        if i != i_conf:
+            num_diff += 1
+
+    print('Number of inliers in disagreement: ', num_diff)
+
+    inlier_pts1 = pts1[matches[inliers_mask_conf, 0]]
+    inlier_pts1 = inlier_pts1.astype(int)
+    inlier_pts2 = pts2[matches[inliers_mask_conf, 1]]
+    inlier_pts2 = inlier_pts2.astype(int)
 
     if visualize_all_matches:
         img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-        plt.imshow(img), plt.show()
+        plt.imshow(img), plt.show(block=False)
 
     if visualize_good_matches:
-        img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-        plt.imshow(img), plt.show()
+        img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask_conf], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+        plt.imshow(img), plt.show(block=False)
 
     if visualize_epipoles:
         draw_epipolar(im1, im2, F, inlier_pts1, inlier_pts2)
@@ -337,6 +405,27 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 
     R, t = visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
     visualize_gv(K1, K2, R, t, inlier_pts1, inlier_pts2)
+
+
+if __name__ == '__main__':
+    file1 = '../datasets/Jeep/images/0000.jpg'
+    file2 = '../datasets/Jeep/images/0002.jpg'
+    obj_filename = '../datasets/Jeep/Jeep-model.obj'
+
+    visualize_all_matches = False
+    visualize_good_matches = True
+    visualize_epipoles = True
+    visualize_ground_truth = False
+
+    n_keypoints = 8000
+
+    np.random.seed(0)
+
+    if visualize_ground_truth:
+        visualize_gt(obj_filename)
+    cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)
+
+
 
 
 def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
@@ -422,19 +511,3 @@ def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     K2 = get_K_from_exif(exif_data2)
 
     visualize_gv_from_F(K1, K2, CV8_F, inlier_keypoints_left, inlier_keypoints_right)
-
-
-if __name__ == '__main__':
-    file1 = '../datasets/Bicycle/images/0000.jpg'
-    file2 = '../datasets/Bicycle/images/0002.jpg'
-
-    visualize_all_matches = False
-    visualize_good_matches = False
-    visualize_epipoles = False
-
-    n_keypoints = 8000
-
-    np.random.seed(0)
-
-    cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)
-    sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)

@@ -1,3 +1,7 @@
+"""
+File containing the SfM Pipeline
+"""
+
 import os
 import warnings
 import pickle
@@ -27,7 +31,7 @@ class Pipeline:
     A SfM Pipeline for reconstructing a 3D scene from a set of 2D images.
 
     """
-    def __init__(self, images_dir, output_dir=os.path.abspath(os.path.join(os.getcwd(), '..')), n_keypoints=100, **kwargs):
+    def __init__(self, images_dir, output_dir=os.path.abspath(os.path.join(os.getcwd(), '..')), **kwargs):
         """
 
         :param images_dir: directory containing set of 2D images
@@ -36,10 +40,12 @@ class Pipeline:
         """
         self.images_dir = images_dir
         self.output_dir = output_dir
-        self.n_keypoints = n_keypoints
-        self._init_pipeline_file_structure()
+        self.n_keypoints = kwargs.pop('n_keypoints', 100)
         self.verbose = kwargs.pop('verbose', False)
         self.gv_threshold = kwargs.pop('gv_threshold', 20)
+        self.n_jobs = kwargs.pop('n_jobs', 1)
+
+        self._init_pipeline_file_structure()
 
         # check valid image dir
         self.images = []
@@ -84,7 +90,7 @@ class Pipeline:
 
         exif_data = [get_human_readable_exif(os.path.join(self.images_dir, img_filename)) for img_filename in img_filenames]
 
-        images = Parallel(n_jobs=-1, backend='threading')(delayed(cv2.imread)(os.path.join(self.images_dir, img_filename), 0)
+        images = Parallel(n_jobs=self.n_jobs, backend='threading')(delayed(cv2.imread)(os.path.join(self.images_dir, img_filename), 0)
                                                             for img_filename in tqdm(img_filenames, desc='Loading images'))
 
         if self.verbose and input("Visualize image loading? (y/n) ") == 'y':
@@ -118,7 +124,7 @@ class Pipeline:
             with open(pickled_keypoints, 'rb') as f:
                 self.keypoints_and_descriptors = pickle.load(f)
         else:
-            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(self.images, self.n_keypoints)
+            self.keypoints_and_descriptors = populate_keypoints_and_descriptors(self.images, self.n_keypoints, self.n_jobs)
             with open(pickled_keypoints, 'wb') as f:
                 pickle.dump(self.keypoints_and_descriptors, f)
 
@@ -289,7 +295,7 @@ class Pipeline:
             self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
 
             ij_combs = list(combinations(range(self.num_images), 2))
-            Parallel(n_jobs=-1, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
+            Parallel(n_jobs=self.n_jobs, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
                     for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
 
             with open(pickled_gv, 'wb') as f:
@@ -345,5 +351,5 @@ if __name__ == '__main__':
     with warnings.catch_warnings():  # TODO how to not display dep warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=True)
+        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=True, n_jobs=-1)
         pipeline.run()
