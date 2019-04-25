@@ -58,6 +58,7 @@ class Pipeline:
         self.feature_extraction_dir = os.path.join(self.pipeline_dir, 'feature_extraction')
         self.feature_matching_dir = os.path.join(self.pipeline_dir, 'feature_matching')
         self.geometric_verification_dir = os.path.join(self.pipeline_dir, 'geometric_verification')
+        self.reconstruction_dir = os.path.join(self.pipeline_dir, 'reconstruction')
 
         if not os.path.exists(self.pipeline_dir):
             os.mkdir(self.pipeline_dir)
@@ -67,6 +68,8 @@ class Pipeline:
             os.mkdir(self.feature_matching_dir)
         if not os.path.exists(self.geometric_verification_dir):
             os.mkdir(self.geometric_verification_dir)
+        if not os.path.exists(self.reconstruction_dir):
+            os.mkdir(self.reconstruction_dir)
 
     def run(self):
         self._extract_features()  # extract features using SIFT
@@ -301,7 +304,42 @@ class Pipeline:
             with open(pickled_gv, 'wb') as f:
                 pickle.dump((self.scene_graph, self.im2im_configs, self.gv_matches), f)
 
+    def _find_homog_inlier_ratio(self, i, j):
+
+
+        raise NotImplementedError
+
+    def _init_reconstruction_impl(self):
+        ij_combs = list(combinations(range(self.num_images), 2))
+
+        # find homography mappings between all image pairs
+        homog_ratios = Parallel(n_jobs=self.n_jobs, backend='threading')(delayed(self._find_homog_inlier_ratio)(i, j)
+                                                for i, j in tqdm(ij_combs, desc='Finding homography inlier ratios'))
+
+        sorted_idxs = np.argsort(np.array(homog_ratios))
+
+
+
+        # use these mappings to find % of matches that are inliers to the homography
+
+        # finally find lowest % with at least 100 matches to start reconstruction from
+
+
     def _init_reconstruction(self):
+        pickled_rc_init = os.path.join(self.reconstruction_dir, 'init.pkl')
+        if os.path.exists(pickled_rc_init):
+            with open(pickled_rc_init, 'rb') as f:
+                init = pickle.load(f)
+        else:
+            init = self._init_reconstruction_impl()
+
+            with open(pickled_rc_init, 'wb') as f:
+                pickle.dump(init, f)
+
+        raise NotImplementedError
+
+    def _init_reconstruction_old(self):
+        # TODO old implementation of initializing
         # prune pairs that don't have enough verified matches
         self.scene_graph[self.scene_graph < self.gv_threshold] = 0
 
@@ -321,7 +359,6 @@ class Pipeline:
         # TODO visualize i, j in 3D
         # TODO add a debug option for visualization
         if self.verbose and input("Visualize initialization images? (y/n) ") == 'y':
-            i,j = 0,1
             K1 = get_K_from_exif(self.exif_data[i])
             K2 = get_K_from_exif(self.exif_data[j])
             R, t = self.im2im_configs[i][j]

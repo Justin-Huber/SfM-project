@@ -349,10 +349,6 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 
     F = np.append(F, 1).reshape(3, 3)
 
-    # F = np.array([[-5.84679442e-07,  7.58216926e-06, - 3.29203581e-02],
-    #               [- 5.26880012e-06, 1.27287041e-07,  1.34151143e-01],
-    #               [3.36179919e-02, - 1.37881031e-01, 9.19840497e-01]])
-
     U, SIGMA, V_T = np.linalg.svd(F)
     SIGMA[2] = 0
     F = U @ np.diag(SIGMA) @ V_T
@@ -403,6 +399,14 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     K1 = get_K_from_exif(exif_data1)
     K2 = get_K_from_exif(exif_data2)
 
+    # https://blender.stackexchange.com/questions/38009/3x4-camera-matrix-from-blender-camera
+    K1 = np.array([[2100.0000, 0.0000, 960.0000],
+                   [0.0000, 2100.0000, 540.0000],
+                   [0.0000, 0.0000, 1.0000]])
+    K2 = np.array([[2100.0000, 0.0000, 960.0000],
+                   [0.0000, 2100.0000, 540.0000],
+                   [0.0000, 0.0000, 1.0000]])
+
     R, t = visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
     visualize_gv(K1, K2, R, t, inlier_pts1, inlier_pts2)
 
@@ -424,8 +428,6 @@ if __name__ == '__main__':
     if visualize_ground_truth:
         visualize_gt(obj_filename)
     cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)
-
-
 
 
 def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
