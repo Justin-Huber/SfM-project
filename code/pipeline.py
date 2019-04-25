@@ -43,6 +43,7 @@ class Pipeline:
         self.n_keypoints = kwargs.pop('n_keypoints', 100)
         self.verbose = kwargs.pop('verbose', False)
         self.gv_threshold = kwargs.pop('gv_threshold', 20)
+        self.init_threshold = kwargs.pop('init_threshold', 100)
         self.n_jobs = kwargs.pop('n_jobs', 1)
 
         self._init_pipeline_file_structure()
@@ -132,7 +133,7 @@ class Pipeline:
                 pickle.dump(self.keypoints_and_descriptors, f)
 
         # deserialize the keypoints
-        self.keypoints_and_descriptors = [deserialize_keypoints(kps_and_des) for kps_and_des in self.keypoints_and_descriptors]
+        self.keypoints_and_descriptors = np.array([deserialize_keypoints(kps_and_des) for kps_and_des in self.keypoints_and_descriptors])
 
         # TODO add debug option to visualize
         if self.verbose and input("Visualize keypoints? (y/n) ") == 'y':
@@ -226,7 +227,8 @@ class Pipeline:
                 pickle.dump(self.matches, f)
 
         self.matches = [[deserialize_matches(ij_matches) for ij_matches in i_matches] for i_matches in self.matches]
-        self.matches = [[sorted(ij_matches, key=lambda match: match.distance) for ij_matches in i_matches] for i_matches in self.matches]
+        self.matches = np.array([[sorted(ij_matches, key=lambda match: match.distance)
+                                  for ij_matches in i_matches] for i_matches in self.matches])
 
         if self.verbose and input("Visualize matches? (y/n) ") == 'y':
             for i in range(self.num_images):
@@ -256,7 +258,7 @@ class Pipeline:
                                                  ransacReprojThreshold=0.001*max(height, width), confidence=0.999)
 
         # TODO extra RANSAC stage to make sure F is correct and not prone to outliers
-        self.gv_matches[i][j] = inliers_mask.ravel() == 1
+        self.gv_masks[i][j] = inliers_mask.ravel() == 1
         self.scene_graph[i, j] = np.sum(inliers_mask)
         # Scene graph is undirected so j,i and i,j have same weight
         self.scene_graph[j, i] = self.scene_graph[i, j]
@@ -284,7 +286,7 @@ class Pipeline:
         pickled_gv = os.path.join(self.geometric_verification_dir, 'geometric_verification.pkl')
         if os.path.exists(pickled_gv):
             with open(pickled_gv, 'rb') as f:
-                self.scene_graph, self.im2im_configs, self.gv_matches = pickle.load(f)
+                self.scene_graph, self.im2im_configs, self.gv_masks = pickle.load(f)
         else:
             # a weighted adjacency list where an edge's weight is indicated
             # by the number of geometrically verified matches the two images share
@@ -292,20 +294,31 @@ class Pipeline:
 
             # R, t matrices between all image combinations
             # None when images don't share an edge
-            self.im2im_configs = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
+            self.im2im_configs = np.array([[None for _ in range(self.num_images)] for _ in range(self.num_images)])
 
             # geometrically verified matches stored as inlier masks
-            self.gv_matches = [[None for _ in range(self.num_images)] for _ in range(self.num_images)]
+            self.gv_masks = np.array([[None for _ in range(self.num_images)] for _ in range(self.num_images)])
 
             ij_combs = list(combinations(range(self.num_images), 2))
             Parallel(n_jobs=self.n_jobs, backend='threading')(delayed(self._geometric_verification_impl)(i, j)
                     for (i, j) in tqdm(ij_combs, desc='Pairwise geometric verification'))
 
             with open(pickled_gv, 'wb') as f:
-                pickle.dump((self.scene_graph, self.im2im_configs, self.gv_matches), f)
+                pickle.dump((self.scene_graph, self.im2im_configs, self.gv_masks), f)
 
     def _find_homog_inlier_ratio(self, i, j):
+        inlier_mask = self.gv_masks[i, j]
+        matches = self.matches[i, j][inlier_mask]
+        kp1 = self.keypoints_and_descriptors[i, 0]
+        kp2 = self.keypoints_and_descriptors[j, 0]
+        src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
+        # 0.4% of max dimension of image as described in "Modeling The World"
+        threshold = 0.004 * max(self.images[i].shape, self.images[j].shape)
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, threshold)
+        matchesMask = mask.ravel().tolist()
+        # use these mappings to find % of matches that are inliers to the homography
 
         raise NotImplementedError
 
@@ -317,16 +330,16 @@ class Pipeline:
                                                 for i, j in tqdm(ij_combs, desc='Finding homography inlier ratios'))
 
         # finally find lowest % with at least 100 matches to start reconstruction from
+
         sorted_idxs = np.argsort(np.array(homog_ratios))
 
-        for idx in sorted_idxs:
+        for i, j in sorted_idxs:
+            num_matches = np.sum(self.gv_masks[i, j])
 
+            if num_matches >= self.init_threshold:
+                return i, j
 
-
-
-        # use these mappings to find % of matches that are inliers to the homography
-
-
+        # if we get here, it means there were no image pairs that had enough matches
         raise RuntimeError("No matches with 100 matches to start reconstruction")
 
     def _init_reconstruction(self):
@@ -366,7 +379,7 @@ class Pipeline:
             K1 = get_K_from_exif(self.exif_data[i])
             K2 = get_K_from_exif(self.exif_data[j])
             R, t = self.im2im_configs[i][j]
-            inliers_mask = self.gv_matches[i][j]
+            inliers_mask = self.gv_masks[i][j]
             kps1 = np.array(self.keypoints_and_descriptors[i][0])[inliers_mask]
             kps2 = np.array(self.keypoints_and_descriptors[j][0])[inliers_mask]
             pts1 = np.array([kp.pt for kp in kps1])
@@ -392,5 +405,5 @@ if __name__ == '__main__':
     with warnings.catch_warnings():  # TODO how to not display dep warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=True, n_jobs=-1)
+        pipeline = Pipeline('../datasets/Bicycle/images/', n_keypoints=100, verbose=False, n_jobs=-1)
         pipeline.run()
