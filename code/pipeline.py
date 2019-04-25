@@ -316,14 +316,18 @@ class Pipeline:
         homog_ratios = Parallel(n_jobs=self.n_jobs, backend='threading')(delayed(self._find_homog_inlier_ratio)(i, j)
                                                 for i, j in tqdm(ij_combs, desc='Finding homography inlier ratios'))
 
+        # finally find lowest % with at least 100 matches to start reconstruction from
         sorted_idxs = np.argsort(np.array(homog_ratios))
+
+        for idx in sorted_idxs:
+
 
 
 
         # use these mappings to find % of matches that are inliers to the homography
 
-        # finally find lowest % with at least 100 matches to start reconstruction from
 
+        raise RuntimeError("No matches with 100 matches to start reconstruction")
 
     def _init_reconstruction(self):
         pickled_rc_init = os.path.join(self.reconstruction_dir, 'init.pkl')
