@@ -6,7 +6,13 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import open3d
-import random
+import time
+from scipy.optimize import leastsq
+
+from feature_extraction import get_human_readable_exif
+
+SIFT = 0
+ORB = 2
 
 
 def drawlines(img1, img2, lines, pts1, pts2):
@@ -32,35 +38,25 @@ def draw_epipolar(img1, img2, F, pts1, pts2):
     lines2 = lines2.reshape(-1, 3)
     img3, img4 = drawlines(img2, img1, lines2, pts2, pts1)
 
+    plt.figure()
     plt.subplot(121)
     plt.imshow(img5)
     plt.subplot(122)
     plt.imshow(img3)
     plt.show(block=False)
+    plt.pause(0.001)
 
 
 def get_K_from_exif(exif_data):
     width = exif_data['ExifImageWidth']
     height = exif_data['ExifImageHeight']
-    focal_length = exif_data['FocalLength'][0]
-    focal_plane_res_unit = exif_data['FocalPlaneResolutionUnit']
+    focal_length = exif_data['FocalLengthIn35mmFilm']
     focal_plane_x_res = exif_data['FocalPlaneXResolution'][0]
-    focal_plane_y_res = exif_data['FocalPlaneXResolution'][0]
+    focal_plane_y_res = exif_data['FocalPlaneYResolution'][0]
+    focal_plane_res_unit = exif_data['FocalPlaneResolutionUnit']
 
-    # TODO figure out what FocalPlaneResolutionUnit
-    # if focal_plane_res_unit == 1:
-    #     conversion = 1
-    # elif focal_plane_res_unit == 2:
-    #     conversion =
-    # elif focal_plane_res_unit == 3:
-    #     conversion =
-    # elif focal_plane_res_unit == 4:
-    #     conversion =
-    # TODO what we're currently doing, seems decent
-    conversion = focal_plane_res_unit
-
-    return np.array([[focal_length * width * conversion / focal_plane_x_res, 0, width / 2],
-                      [0, focal_length * height * conversion / focal_plane_y_res, height / 2],
+    return np.array([[focal_plane_x_res * focal_plane_res_unit, 0, width / 2],
+                      [0, focal_plane_y_res * focal_plane_res_unit, height / 2],
                       [0, 0, 1]])
 
 
@@ -91,14 +87,6 @@ def F_matrix_residuals(F, inlier_pts1, inlier_pts2):
     for pt1, pt2, in zip(inlier_pts1, inlier_pts2):
         res.append(compute_F_matrix_residual(F, pt1, pt2))
     return res
-
-
-from skimage.color import rgb2gray
-from skimage.feature import match_descriptors, ORB, plot_matches
-from skimage.measure import ransac
-from skimage import io
-from skimage.transform import FundamentalMatrixTransform
-from skimage import img_as_ubyte
 
 
 def findPointCloud(K1, K2, R, t, pts1, pts2):
@@ -258,31 +246,8 @@ def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matc
     ax[0].set_title("Matches")
 
     plt.show(block=False)
+    plt.pause(0.001)
 
-    plt.cla()
-
-
-def visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, matches, inliers):
-    cv_keypoints_left = np.array([cv2.KeyPoint(x=point[1], y=point[0],
-                                               _size=0, _angle=0,
-                                               _response=0, _octave=0,
-                                               _class_id=0) for point in keypoints_left])
-    cv_keypoints_right = np.array([cv2.KeyPoint(x=point[1], y=point[0],
-                                                _size=0, _angle=0,
-                                                _response=0, _octave=0,
-                                                _class_id=0) for point in keypoints_right])
-    cv_matches = np.array([cv2.DMatch(_distance=0, _imgIdx=0,
-                                      _queryIdx=match[0], _trainIdx=match[1]) for match in matches])
-    cv_inlier_matches = cv_matches[inliers]
-    img = cv2.drawMatches(img_left, cv_keypoints_left, img_right, cv_keypoints_right, cv_inlier_matches, None,
-                          flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-    plt.imshow(img), plt.show(block=False)
-
-
-import time
-from scipy.optimize import minimize, leastsq, least_squares
-global_pts1 = []
-global_pts2 = []
 
 def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
     start_time = time.time()
@@ -290,27 +255,27 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     im1 = cv2.imread(file1, 0)
     im2 = cv2.imread(file2, 0)
 
-    # sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
-    # kp1, des1 = sift.detectAndCompute(im1, None)
-    # kp2, des2 = sift.detectAndCompute(im2, None)
+    method = ORB
 
-    orb = cv2.ORB_create(n_keypoints)
-    kp1, des1 = orb.detectAndCompute(im1, None)
-    kp2, des2 = orb.detectAndCompute(im2, None)
+    if method == SIFT:
+        sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
+        kp1, des1 = sift.detectAndCompute(im1, None)
+        kp2, des2 = sift.detectAndCompute(im2, None)
+        bf = cv2.BFMatcher(cv2.NORM_L1, crossCheck=True)
+    elif method == ORB:
+        orb = cv2.ORB_create(n_keypoints)
+        kp1, des1 = orb.detectAndCompute(im1, None)
+        kp2, des2 = orb.detectAndCompute(im2, None)
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    else:
+        raise RuntimeError("Invalid method")
+
+    cv_matches = bf.match(des1, des2)
+    cv_matches = np.array(cv_matches)
 
     pts1 = np.array([kp.pt for kp in kp1])
     pts2 = np.array([kp.pt for kp in kp2])
 
-    # # FLANN parameters
-    # FLANN_INDEX_KDTREE = 0
-    # index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)  # TODO set params differently?
-    # search_params = dict(checks=50)  # or pass empty dictionary
-    # matcher = cv2.FlannBasedMatcher(index_params, search_params)
-    # cv_matches = matcher.knnMatch(des1, des2, k=2)
-
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    cv_matches = bf.match(des1, des2)
-    cv_matches = np.array(cv_matches)
     matches = np.array([(match.queryIdx, match.trainIdx) for match in cv_matches])
     cv_end_time = time.time()
 
@@ -333,18 +298,7 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     inlier_pts2 = pts2[matches[inliers_mask, 1]]
     inlier_pts2 = inlier_pts2.astype(int)
 
-    if visualize_good_matches:
-        img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-        plt.imshow(img), plt.show(block=False)
-
-    if visualize_epipoles:
-        draw_epipolar(im1, im2, F, inlier_pts1, inlier_pts2)
-
-    global global_pts1
-    global global_pts2
-    global_pts1 = inlier_pts1
-    global_pts2 = inlier_pts2
-    # TODO optimize F according to the inliers using Levenberg-Marquardt
+    # optimize F according to the inliers using Levenberg-Marquardt
     F, _ = leastsq(func=F_matrix_residuals, x0=F.flatten()[:-1].reshape(-1, 1), args=(inlier_pts1, inlier_pts2))
 
     F = np.append(F, 1).reshape(3, 3)
@@ -352,8 +306,6 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     U, SIGMA, V_T = np.linalg.svd(F)
     SIGMA[2] = 0
     F = U @ np.diag(SIGMA) @ V_T
-
-    print(F)
 
     # TODO get inliers to optimized F
     inliers_mask_conf = np.zeros(len(inliers_mask))
@@ -381,17 +333,22 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 
     if visualize_all_matches:
         img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-        plt.imshow(img), plt.show(block=False)
+        plt.figure()
+        plt.imshow(img)
+        plt.show(block=False)
+        plt.pause(0.001)
 
     if visualize_good_matches:
         img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask_conf], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
-        plt.imshow(img), plt.show(block=False)
+        plt.figure()
+        plt.imshow(img)
+        plt.show(block=False)
+        plt.pause(0.001)
 
     if visualize_epipoles:
         draw_epipolar(im1, im2, F, inlier_pts1, inlier_pts2)
 
     # Draw 3D
-    from feature_extraction import get_human_readable_exif
     exif_data1 = get_human_readable_exif(file1)
     exif_data2 = get_human_readable_exif(file2)
 
@@ -406,6 +363,15 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
     K2 = np.array([[2100.0000, 0.0000, 960.0000],
                    [0.0000, 2100.0000, 540.0000],
                    [0.0000, 0.0000, 1.0000]])
+
+    # temple = np.load('../data/temple.npz')
+    # K1, K2 = temple['K1'], temple['K2']
+    #
+    # K1[0, 2] = im1.shape[1] / 2
+    # K1[1, 2] = im1.shape[0] / 2
+    # K2[0, 2] = im2.shape[1] / 2
+    # K2[1, 2] = im2.shape[0] / 2
+
 
     R, t = visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
     visualize_gv(K1, K2, R, t, inlier_pts1, inlier_pts2)
