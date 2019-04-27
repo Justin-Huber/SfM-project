@@ -72,8 +72,8 @@ def pickleable_detect_and_compute(img, n_keypoints):
     :return: returns a tuple of the serialized keypoint and descriptor
     """
     # Initiate SIFT detector
-    sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
-    kp, des = sift.detectAndCompute(img, None)
+    detector = cv2.xfeatures2d.SIFT_create(n_keypoints)
+    kp, des = detector.detectAndCompute(img, None)
     return serialize_keypoints(kp, des)
 
 
@@ -86,7 +86,6 @@ def populate_keypoints_and_descriptors(images, n_keypoints, n_jobs):
     """
     # Initiate SIFT detector
     # find the keypoints and descriptors with SIFT
-    # TODO not parallel?
     kps_and_des = Parallel(n_jobs=n_jobs, backend='threading')(delayed(pickleable_detect_and_compute)(img, n_keypoints)
                                         for img in tqdm(images, desc='Extracting features and descriptors'))
     # TODO add debug option to visualize

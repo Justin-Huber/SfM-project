@@ -7,12 +7,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import open3d
 import time
+import scipy
 from scipy.optimize import leastsq
 
 from feature_extraction import get_human_readable_exif
 
 SIFT = 0
 ORB = 2
+FLANN = 3
+BF = 4
 
 
 def drawlines(img1, img2, lines, pts1, pts2):
@@ -48,6 +51,10 @@ def draw_epipolar(img1, img2, F, pts1, pts2):
 
 
 def get_K_from_exif(exif_data):
+    return np.array([[2100.0000, 0.0000, 960.0000],
+                     [0.0000, 2100.0000, 540.0000],
+                     [0.0000, 0.0000, 1.0000]])
+    # TODO inaccurate for now
     width = exif_data['ExifImageWidth']
     height = exif_data['ExifImageHeight']
     focal_length = exif_data['FocalLengthIn35mmFilm']
@@ -70,32 +77,38 @@ def compute_F_matrix_residual(F, pt1, pt2):
     :return:
     """
 
-    if F.shape != (3,3):
+    if F.shape != (3, 3):
         F = np.append(F, 1)
-        F = F.reshape((3,3))  # optimizer reshapes to (9,)
+        F = F.reshape((3, 3))  # optimizer reshapes to (9,)
 
-    line2 = cv2.computeCorrespondEpilines(pt1.reshape(-1, 1, 2), 1, F)
-    line2 = line2.squeeze()
-    pt2 = cv2.convertPointsToHomogeneous(np.array([pt2]))
-    pt2 = pt2.squeeze()
-    dist = np.abs(line2.dot(pt2) / np.sqrt(line2[0]**2 + line2[1]**2))
+    if len(pt1.shape) > 1:
+        lines2 = cv2.computeCorrespondEpilines(pt1.reshape(-1, 1, 2), 1, F)
+        lines2 = lines2.squeeze()
+        lines2 /= lines2[:, 2, None]
+        pt2 = cv2.convertPointsToHomogeneous(np.array(pt2))
+        pt2 = pt2.squeeze()
+        num = np.einsum('ij,ij->i', lines2, pt2)
+        denom = np.linalg.norm(lines2[:, :-1], axis=1)
+        dist = num / denom
+    else:
+        line2 = cv2.computeCorrespondEpilines(pt1.reshape(-1, 1, 2), 1, F)
+        line2 = line2.squeeze()
+        pt2 = cv2.convertPointsToHomogeneous(np.array([pt2]))
+        pt2 = pt2.squeeze()
+        dist = np.abs(line2.dot(pt2) / np.sqrt(line2[0]**2 + line2[1]**2))
     return dist
 
 
 def F_matrix_residuals(F, inlier_pts1, inlier_pts2):
-    res = []
-    for pt1, pt2, in zip(inlier_pts1, inlier_pts2):
-        res.append(compute_F_matrix_residual(F, pt1, pt2))
-    return res
+    return compute_F_matrix_residual(F, inlier_pts1, inlier_pts2)
 
 
-def findPointCloud(K1, K2, R, t, pts1, pts2):
-    I = np.diag(np.ones(R.shape[1]))
-    I_zeros = np.append(I, np.zeros((I.shape[0], 1)), axis=1)
-    R_t = np.append(R, t, axis=1)
+def findPointCloud(K1, K2, R1, t1, R2, t2, pts1, pts2):
+    R_t1 = np.append(R1, t1, axis=1)
+    R_t2 = np.append(R2, t2, axis=1)
 
-    P1 = K1 @ I_zeros
-    P2 = K2 @ R_t
+    P1 = K1 @ R_t1
+    P2 = K2 @ R_t2
 
     X = cv2.triangulatePoints(P1[:3], P2[:3], pts1.T.astype(float), pts2.T.astype(float))
     X /= X[3]
@@ -108,7 +121,30 @@ def findPointCloud(K1, K2, R, t, pts1, pts2):
 
     mask = [all(tup) for tup in zip(mask1, mask2)]
 
-    return X[:, mask]
+    return X[:, mask][:3]
+
+
+# def findPointCloud(K1, K2, R, t, pts1, pts2):
+#     I = np.diag(np.ones(R.shape[1]))
+#     zeros = np.zeros((I.shape[0], 1))
+#     I_zeros = np.append(I, zeros, axis=1)
+#     R_t = np.append(R, t, axis=1)
+#
+#     P1 = K1 @ I_zeros
+#     P2 = K2 @ R_t
+#
+#     X = cv2.triangulatePoints(P1[:3], P2[:3], pts1.T.astype(float), pts2.T.astype(float))
+#     X /= X[3]
+#
+#     X_prime1 = P1 @ X
+#     X_prime2 = P2 @ X
+#
+#     mask1 = X_prime1[2] > 0
+#     mask2 = X_prime2[2] > 0
+#
+#     mask = [all(tup) for tup in zip(mask1, mask2)]
+#
+#     return X[:, mask][:3]
 
 
 def visualize_pcd(points):
@@ -249,32 +285,79 @@ def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matc
     plt.pause(0.001)
 
 
-def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
+def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints, method, matcher_type):
     start_time = time.time()
     # Find sparse feature correspondences between left and right image.
     im1 = cv2.imread(file1, 0)
     im2 = cv2.imread(file2, 0)
 
-    method = ORB
-
     if method == SIFT:
         sift = cv2.xfeatures2d.SIFT_create(n_keypoints)
         kp1, des1 = sift.detectAndCompute(im1, None)
         kp2, des2 = sift.detectAndCompute(im2, None)
-        bf = cv2.BFMatcher(cv2.NORM_L1, crossCheck=True)
+        # bf = cv2.BFMatcher(cv2.NORM_L1, crossCheck=True)
     elif method == ORB:
         orb = cv2.ORB_create(n_keypoints)
         kp1, des1 = orb.detectAndCompute(im1, None)
         kp2, des2 = orb.detectAndCompute(im2, None)
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        # bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     else:
         raise RuntimeError("Invalid method")
 
-    cv_matches = bf.match(des1, des2)
+    if matcher_type == FLANN:
+        # # FLANN parameters
+        # FLANN_INDEX_LSH = 6
+        # index_params = dict(algorithm=FLANN_INDEX_LSH,
+        #                     table_number=12,
+        #                     key_size=20,
+        #                     multi_probe_level=2)
+        # search_params = dict(checks=200)  # or pass empty dictionary
+        # matcher = cv2.FlannBasedMatcher(index_params, search_params)
+
+        # FLANN parameters
+        FLANN_INDEX_KDTREE = 0
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=200)
+        matcher = cv2.FlannBasedMatcher(index_params, search_params)
+
+        matches = matcher.knnMatch(des1, des2, k=2)
+
+        # Need to draw only good matches, so create a mask
+        matchesMask = [[0, 0] for _ in range(len(matches))]
+
+        # ratio test as per Lowe's paper
+        for k, (m, n) in enumerate(matches):
+            if m.distance < 0.6 * n.distance:
+                matchesMask[k] = [1, 0]
+
+        # remove matches who map to same keypoint in j
+        counts = {match.trainIdx: 0 for match, _ in matches}
+        for match, _ in matches:
+            counts[match.trainIdx] += 1
+
+        i_with_j_matches = []
+        for (match, _), (matchMask, _) in zip(matches, matchesMask):
+            if matchMask and counts[match.trainIdx] == 1:
+                i_with_j_matches.append(match)
+    elif matcher_type == BF:
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    else:
+        raise RuntimeError("Invalid matcher")
+
+    cv_matches = matcher.match(des1, des2)
+    cv_matches = i_with_j_matches
     cv_matches = np.array(cv_matches)
 
     pts1 = np.array([kp.pt for kp in kp1])
     pts2 = np.array([kp.pt for kp in kp2])
+
+    # 0.4% of max dimension of image as described in "Modeling The World"
+    homog_threshold = 0.004 * max(im1.shape)
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in cv_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in cv_matches]).reshape(-1, 1, 2)
+    M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, homog_threshold)
+    homog_ratio = np.mean(mask)
+    print('Homography ratio: ', homog_ratio)
 
     matches = np.array([(match.queryIdx, match.trainIdx) for match in cv_matches])
     cv_end_time = time.time()
@@ -283,7 +366,7 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 
     print("Number of matches:", len(cv_matches))
 
-    threshold = 0.001 * max(im1.shape)
+    threshold = 0.006 * max(im1.shape)
     F, inliers_mask = cv2.findFundamentalMat(pts1[matches[:, 0]],
                                              pts2[matches[:, 1]],
                                              method=cv2.FM_RANSAC,
@@ -342,7 +425,7 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
         img = cv2.drawMatches(im1, kp1, im2, kp2, cv_matches[inliers_mask_conf], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
         plt.figure()
         plt.imshow(img)
-        plt.show(block=False)
+        plt.show(block=True)
         plt.pause(0.001)
 
     if visualize_epipoles:
@@ -378,8 +461,8 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 
 
 if __name__ == '__main__':
-    file1 = '../datasets/Jeep/images/0000.jpg'
-    file2 = '../datasets/Jeep/images/0002.jpg'
+    file1 = '../datasets/Statue/images/0226.jpg'
+    file2 = '../datasets/Statue/images/0216.jpg'
     obj_filename = '../datasets/Jeep/Jeep-model.obj'
 
     visualize_all_matches = False
@@ -391,9 +474,13 @@ if __name__ == '__main__':
 
     np.random.seed(0)
 
+    method = SIFT
+    matcher_type = FLANN
+
     if visualize_ground_truth:
         visualize_gt(obj_filename)
-    cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints)
+    cv_impl(file1, file2,
+            visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints, method, matcher_type)
 
 
 def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
@@ -474,7 +561,7 @@ def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
                    [0, 1525.9, 246.9],
                    [0, 0, 1]])
 
-    # # TODO ask about this
+    # TODO ask about this
     K1 = get_K_from_exif(exif_data1)
     K2 = get_K_from_exif(exif_data2)
 
