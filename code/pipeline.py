@@ -25,7 +25,8 @@ from feature_extraction import get_human_readable_exif, populate_keypoints_and_d
 from feature_matching import serialize_matches, deserialize_matches
 from geometric_verification import draw_epipolar, get_K_from_exif, visualize_pcd, visualize_gv,\
                                     get_best_configuration, F_matrix_residuals, compute_F_matrix_residual, findPointCloud
-from reconstruction import get_camera_pose, get_angle, rotate_view
+from reconstruction import get_camera_pose, get_angle, rotate_view, get_pcd, get_gt_points
+from evaluation import draw_registration_result, align_pcd, preprocess_point_cloud, prepare_dataset, execute_global_registration, refine_registration
 
 FLANN = 0
 BF = 1
@@ -693,14 +694,36 @@ class Pipeline:
             #self.visualize_pcd()
 
     def evaluate(self):
-        raise NotImplementedError
+        # rc_pcd = get_pcd(self.pcd)
+        # gt_points = get_gt_points("../datasets/Bicycle/Bicycle-model.obj")
+        # gt_pcd = get_pcd(self.pcd)
+        
+        # align_pcd(rc_pcd, gt_pcd)
+        source = get_pcd(self.pcd)
+        gt_points = get_gt_points("../datasets/Statue/Statue-model.obj")
+        target = get_pcd(gt_points)
+
+
+        voxel_size = 0.05 # means 5cm for the dataset
+        source, target, source_down, target_down, source_fpfh, target_fpfh = \
+            prepare_dataset(voxel_size, source, target)
+
+        result_ransac = execute_global_registration(source_down, target_down, source_fpfh, target_fpfh, voxel_size)
+        print(result_ransac)
+        draw_registration_result(source_down, target_down, result_ransac.transformation)
+
+        result_icp = refine_registration(source, target, source_fpfh, target_fpfh, voxel_size, result_ransac)
+        print(result_icp)
+        draw_registration_result(source, target, result_icp.transformation)
+        
+        #raise NotImplementedError
 
 
 if __name__ == '__main__':
     with warnings.catch_warnings():  # TODO how to not display deprecation warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        pipeline = Pipeline('../datasets/Statue/images/',
+        pipeline = Pipeline('../datasets/Jeep/images/',
                             n_keypoints=8000, verbose=False,
                             n_jobs=-1, init_threshold=100)
         pipeline.run()

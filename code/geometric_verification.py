@@ -158,6 +158,7 @@ def visualize_pcd(points):
     open3d.draw_geometries([pcd])
 
 
+
 def get_best_configuration(K1, K2, F, pts1, pts2):
     E = K2.T @ F @ K1
 
@@ -270,6 +271,7 @@ def visualize_gt(obj_filename):
 
     points = np.array([x, y, z])
     visualize_pcd(points.astype(float).T)
+
 
 
 def visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches):
