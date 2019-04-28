@@ -80,17 +80,17 @@ class Pipeline:
 
     def run(self):
         pickled_pcd = os.path.join(self.reconstruction_dir, 'pcd.pkl')
-        if os.path.exists(pickled_pcd):
+        if os.path.exists(pickled_pcd):  # if point cloud has already been generated, just load it
             with open(pickled_pcd, 'rb') as f:
                 self.pcd, self.camera3Dpose = pickle.load(f)
-        else:
+        else:  # otherwise do necessary computations to generate it
             self._extract_features()  # extract features using ORB
             self._match_features()  # match features using FLANN
             self._geometric_verification()
             self._init_reconstruction()
             self._reconstruct3d()
-            with open(pickled_pcd, 'wb') as f:
-                pickle.dump((self.pcd, self.camera3Dpose), f)
+            # with open(pickled_pcd, 'wb') as f:
+            #    pickle.dump((self.pcd, self.camera3Dpose), f)
 
     def _load_images_impl(self):
         """
@@ -167,13 +167,13 @@ class Pipeline:
         if mask is None:
             img = cv2.drawMatches(self.images[i], self.keypoints_and_descriptors[i][0],
                                    self.images[j], self.keypoints_and_descriptors[j][0],
-                                   self.matches[i][j], None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+                                   self.matches[i][j], None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS, matchColor=(0,255,0))
         else:
             # TODO change all other lists to numpy ArrayItemContainers
             matches_as_np = np.array(self.matches[i][j])[mask == 1]
             img = cv2.drawMatches(self.images[i], self.keypoints_and_descriptors[i][0],
                                   self.images[j], self.keypoints_and_descriptors[j][0],
-                                  matches_as_np, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
+                                  matches_as_np, None, flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS, matchColor=(0,255,0))
         plt.imshow(img), plt.show(block=False), plt.pause(0.001)
 
     def _match_features_parallel(self):
@@ -335,14 +335,6 @@ class Pipeline:
                 K1 = get_K_from_exif(exif_data1)
                 K2 = get_K_from_exif(exif_data2)
 
-                # https://blender.stackexchange.com/questions/38009/3x4-camera-matrix-from-blender-camera
-                K1 = np.array([[2100.0000, 0.0000, 960.0000],
-                               [0.0000, 2100.0000, 540.0000],
-                               [0.0000, 0.0000, 1.0000]])
-                K2 = np.array([[2100.0000, 0.0000, 960.0000],
-                               [0.0000, 2100.0000, 540.0000],
-                               [0.0000, 0.0000, 1.0000]])
-
                 if inlier_pts1.shape[0] > 0 and inlier_pts2.shape[0] > 0:
                     # get E from exif data and F
                     self.im2im_configs[i][j] = get_best_configuration(K1, K2, F, inlier_pts1, inlier_pts2)
@@ -483,7 +475,7 @@ class Pipeline:
             rc_pcd.points = open3d.Vector3dVector(pcd)
             rc_pcd.paint_uniform_color([0, 0, 1])
 
-            cams3dpose = np.array([-np.matrix(pose[0]).T * np.matrix(pose[1]) for pose in self.camera3Dpose if
+            cams3dpose = np.array([-pose[0].T @ pose[1] for pose in self.camera3Dpose if
                                    pose is not None]).squeeze()
             cam_pcd = open3d.PointCloud()
             cam_pcd.points = open3d.Vector3dVector(cams3dpose)
@@ -501,14 +493,18 @@ class Pipeline:
             rc2_pcd.points = open3d.Vector3dVector(pcd2)
             rc2_pcd.paint_uniform_color([0, 1, 0])
 
-            cams3dpose = np.array([-np.matrix(pose[0]).T * np.matrix(pose[1]) for pose in self.camera3Dpose if pose is not None]).squeeze()
+            cams3dpose = np.array([-pose[0].T @ pose[1] for pose in self.camera3Dpose if
+                                   pose is not None]).squeeze()
             cam_pcd = open3d.PointCloud()
             cam_pcd.points = open3d.Vector3dVector(cams3dpose)
             cam_pcd.paint_uniform_color([1, 0, 0])
 
-            cams3dpose2 = np.array(-np.matrix(self.camera3Dpose[self.last_cam_added][0]).T * np.matrix(self.camera3Dpose[self.last_cam_added][1])).squeeze()
+            if type(self.last_cam_added) == list:
+                cams3dpose2 = np.array([-self.camera3Dpose[camID][0].T @ self.camera3Dpose[camID][1] for camID in self.last_cam_added]).squeeze()
+            else:
+                cams3dpose2 = [np.array([-self.camera3Dpose[self.last_cam_added][0].T @ self.camera3Dpose[self.last_cam_added][1]]).squeeze()]
             cam_pcd2 = open3d.PointCloud()
-            cam_pcd2.points = open3d.Vector3dVector([cams3dpose2])
+            cam_pcd2.points = open3d.Vector3dVector(cams3dpose2)
             cam_pcd2.paint_uniform_color([1, 0.706, 0])
             open3d.draw_geometries([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
             #open3d.draw_geometries_with_animation_callback([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd], rotate_view)
@@ -535,8 +531,6 @@ class Pipeline:
         return np.array(pts1), np.array(pts2)
 
     def _triangulate_tracks(self, tracks, i, j):
-        # TODO incorporate tracks, currently triangulating just matches between i and j which is incorrect
-
         return
 
     def _init_reconstruction(self):
@@ -554,7 +548,8 @@ class Pipeline:
             with open(pickled_rc_init, 'wb') as f:
                 pickle.dump(init_imgs, f)
 
-        i, j = init_imgs
+        self.init_i, self.init_j = init_imgs
+        i, j = self.init_i, self.init_j
 
         self.unregistered_imgs = set(range(self.num_images))
         self.registered_tracks = set()
@@ -575,7 +570,7 @@ class Pipeline:
         pts1, pts2 = self._get_track_kp_between_images(shared_tracks, i, j)
 
         # TODO add a way to associate 3D pts with the cameras that observe it
-        self.pcd = findPointCloud(K1, K2, R1, t1, R2, t2, pts1, pts2)[:3].T
+        self.pcd = findPointCloud(K1, K2, R1, t1, R2, t2, pts1, pts2).T
         self._bundle_adjustment()  # perform two frame bundle adjustment
 
         i_pts2d = []
@@ -603,9 +598,6 @@ class Pipeline:
         if self.verbose and input("Visualize initialization images? (y/n) ") == 'y':
             inliers_mask = self.gv_masks[i][j]
             self.visualize_matches(i, j, inliers_mask)
-        self.num_points_added_last_itr = self.pcd.shape[0]
-        self.last_cam_added = i
-        self.visualize_pcd()
 
     def _register_next_img(self):
         """
@@ -638,7 +630,7 @@ class Pipeline:
         K1 = get_K_from_exif(self.exif_data[i])
         # solve for camera positions in 3D space TODO maybe refine later
         R1, t1 = get_camera_pose(i_pts2d, pts3d, K1)
-        i_cam_pt3d = -R1.T @ t1
+        i_cam_pt3d = R1.T @ t1
         self.camera3Dpose[i] = R1, t1
 
         self.last_cam_added = i
@@ -688,11 +680,17 @@ class Pipeline:
         warnings.warn('NotImplementedWarning')
 
     def _reconstruct3d(self):
+        self.num_points_added_last_itr = self.pcd.shape[0]
+        self.last_cam_added = [self.init_i, self.init_j]
         while self.unregistered_imgs != set():
-            self._register_next_img()
             #self.visualize_pcd()
+            self._register_next_img()
+
+        self.visualize_matches(self.init_i, self.init_j)
+        self.visualize_matches(self.init_i, self.init_j, self.gv_masks[self.init_i, self.init_j])
 
     def evaluate(self):
+        self._geometric_verification_impl(self.init_i, self.init_j)
         raise NotImplementedError
 
 

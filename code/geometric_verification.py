@@ -46,11 +46,12 @@ def draw_epipolar(img1, img2, F, pts1, pts2):
     plt.imshow(img5)
     plt.subplot(122)
     plt.imshow(img3)
-    plt.show(block=False)
+    plt.show(block=True)
     plt.pause(0.001)
 
 
 def get_K_from_exif(exif_data):
+    # https://blender.stackexchange.com/questions/38009/3x4-camera-matrix-from-blender-camera
     return np.array([[2100.0000, 0.0000, 960.0000],
                      [0.0000, 2100.0000, 540.0000],
                      [0.0000, 0.0000, 1.0000]])
@@ -122,29 +123,6 @@ def findPointCloud(K1, K2, R1, t1, R2, t2, pts1, pts2):
     mask = [all(tup) for tup in zip(mask1, mask2)]
 
     return X[:, mask][:3]
-
-
-# def findPointCloud(K1, K2, R, t, pts1, pts2):
-#     I = np.diag(np.ones(R.shape[1]))
-#     zeros = np.zeros((I.shape[0], 1))
-#     I_zeros = np.append(I, zeros, axis=1)
-#     R_t = np.append(R, t, axis=1)
-#
-#     P1 = K1 @ I_zeros
-#     P2 = K2 @ R_t
-#
-#     X = cv2.triangulatePoints(P1[:3], P2[:3], pts1.T.astype(float), pts2.T.astype(float))
-#     X /= X[3]
-#
-#     X_prime1 = P1 @ X
-#     X_prime2 = P2 @ X
-#
-#     mask1 = X_prime1[2] > 0
-#     mask2 = X_prime2[2] > 0
-#
-#     mask = [all(tup) for tup in zip(mask1, mask2)]
-#
-#     return X[:, mask][:3]
 
 
 def visualize_pcd(points):
@@ -450,15 +428,6 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
                    [0.0000, 2100.0000, 540.0000],
                    [0.0000, 0.0000, 1.0000]])
 
-    # temple = np.load('../data/temple.npz')
-    # K1, K2 = temple['K1'], temple['K2']
-    #
-    # K1[0, 2] = im1.shape[1] / 2
-    # K1[1, 2] = im1.shape[0] / 2
-    # K2[0, 2] = im2.shape[1] / 2
-    # K2[1, 2] = im2.shape[0] / 2
-
-
     R, t = visualize_gv_from_F(K1, K2, F, inlier_pts1, inlier_pts2)
     visualize_gv(K1, K2, R, t, inlier_pts1, inlier_pts2)
 
@@ -466,12 +435,12 @@ def cv_impl(file1, file2, visualize_all_matches, visualize_good_matches, visuali
 if __name__ == '__main__':
     file1 = '../datasets/Statue/images/0226.jpg'
     file2 = '../datasets/Statue/images/0216.jpg'
-    obj_filename = '../datasets/Jeep/Jeep-model.obj'
+    obj_filename = '../datasets/Statue/Statue-model.obj'
 
     visualize_all_matches = False
     visualize_good_matches = True
     visualize_epipoles = True
-    visualize_ground_truth = False
+    visualize_ground_truth = True
 
     n_keypoints = 8000
 
@@ -483,89 +452,6 @@ if __name__ == '__main__':
     if visualize_ground_truth:
         visualize_gt(obj_filename)
     cv_impl(file1, file2,
-            visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints, method, matcher_type)
-
-
-def sk_impl(file1, file2, visualize_all_matches, visualize_good_matches, visualize_epipoles, n_keypoints):
-    start_time = time.time()
-    # Find sparse feature correspondences between left and right image.
-    img_left, img_right = io.imread(file1), io.imread(file2)
-    img_left, img_right = map(rgb2gray, (img_left, img_right))
-
-    descriptor_extractor = ORB(n_keypoints=n_keypoints)
-    descriptor_extractor.detect_and_extract(img_left)
-    keypoints_left = descriptor_extractor.keypoints
-    descriptors_left = descriptor_extractor.descriptors
-
-    descriptor_extractor.detect_and_extract(img_right)
-    keypoints_right = descriptor_extractor.keypoints
-    descriptors_right = descriptor_extractor.descriptors
-
-    matches = match_descriptors(descriptors_left, descriptors_right,
-                                cross_check=True)
-    sk_end_time = time.time()
-
-    print('SK Runtime: ', sk_end_time - start_time)
-
-    print("Number of matches:", matches.shape[0])
-
-    if visualize_all_matches:
-        visualize_matches(img_left, img_right, keypoints_left, keypoints_right, matches)
-
-    img_left = img_as_ubyte(img_left)
-    img_right = img_as_ubyte(img_right)
-
-    model, inliers = ransac((keypoints_left[matches[:, 0]],
-                             keypoints_right[matches[:, 1]]),
-                            FundamentalMatrixTransform, min_samples=8,
-                            residual_threshold=0.001*max(img_left.shape), max_trials=5000)
-
-    print("Number of inliers:", inliers.sum())
-
-    if visualize_good_matches:
-        visualize_cv_matches(img_left, img_right, keypoints_left, keypoints_right, matches, inliers)
-
-    inlier_keypoints_left = keypoints_left[matches[inliers, 0]]
-    inlier_keypoints_left = inlier_keypoints_left.astype(int)
-    inlier_keypoints_left = np.array([(x, y) for (y, x) in inlier_keypoints_left])
-    inlier_keypoints_right = keypoints_right[matches[inliers, 1]]
-    inlier_keypoints_right = inlier_keypoints_right.astype(int)
-    inlier_keypoints_right = np.array([(x, y) for (y, x) in inlier_keypoints_right])
-
-    # TODO how to properly select
-    CV8_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right,
-                                         method=cv2.FM_8POINT)
-    print('CV8 F: ', CV8_F)
-    if visualize_epipoles:
-        draw_epipolar(img_left, img_right,
-                      CV8_F,
-                      inlier_keypoints_left, inlier_keypoints_right)
-
-    sample_from = np.random.choice(inlier_keypoints_left.shape[0], 20)
-    sampled_kp_left = inlier_keypoints_left[sample_from, :]
-    sampled_kp_right = inlier_keypoints_right[sample_from, :]
-
-    # TODO potentially another round of RANSAC here to initialize F correctly
-    # Create F matrices
-    CV8_F, mask = cv2.findFundamentalMat(sampled_kp_left, sampled_kp_right, method=cv2.FM_8POINT)
-
-    CV8_F, mask = cv2.findFundamentalMat(inlier_keypoints_left, inlier_keypoints_right,
-                                         method=cv2.FM_8POINT)
-
-    # Draw 3D
-    from feature_extraction import get_human_readable_exif
-    exif_data1 = get_human_readable_exif(file1)
-    exif_data2 = get_human_readable_exif(file2)
-
-    K1 = np.array([[1520.4, 0, 302.3],
-                   [0, 1525.9, 246.9],
-                   [0, 0, 1]])
-    K2 = np.array([[1520.4, 0, 302.3],
-                   [0, 1525.9, 246.9],
-                   [0, 0, 1]])
-
-    # TODO ask about this
-    K1 = get_K_from_exif(exif_data1)
-    K2 = get_K_from_exif(exif_data2)
-
-    visualize_gv_from_F(K1, K2, CV8_F, inlier_keypoints_left, inlier_keypoints_right)
+            visualize_all_matches, visualize_good_matches,
+            visualize_epipoles, n_keypoints,
+            method, matcher_type)
