@@ -6,6 +6,7 @@ import numpy as np
 import copy
 import math
 
+
 def scale_pcd(pcd, s):
     return pcd * s
 
@@ -17,7 +18,6 @@ def draw_registration_result(source, target, transformation):
     target_temp.paint_uniform_color([0, 0.651, 0.929])
     source_temp.transform(transformation)
     draw_geometries([source_temp, target_temp])
-
 
 
 def preprocess_point_cloud(pcd, voxel_size):
@@ -45,15 +45,14 @@ def prepare_dataset(voxel_size, source, target):
                             [0.0, 1.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 1.0]])
     source.transform(trans_init)
-    draw_registration_result(source, target, np.identity(4))
+    #draw_registration_result(source, target, np.identity(4))
 
     source_down, source_fpfh = preprocess_point_cloud(source, voxel_size)
     target_down, target_fpfh = preprocess_point_cloud(target, voxel_size)
     return source, target, source_down, target_down, source_fpfh, target_fpfh
 
 
-def execute_global_registration(
-        source_down, target_down, source_fpfh, target_fpfh, voxel_size):
+def execute_global_registration(source_down, target_down, source_fpfh, target_fpfh, voxel_size):
     distance_threshold = voxel_size * 1.5
     print(":: RANSAC registration on downsampled point clouds.")
     print("   Since the downsampling voxel size is %.3f," % voxel_size)
@@ -64,8 +63,9 @@ def execute_global_registration(
             TransformationEstimationPointToPoint(False), 4,
             [CorrespondenceCheckerBasedOnEdgeLength(0.9),
             CorrespondenceCheckerBasedOnDistance(distance_threshold)],
-            RANSACConvergenceCriteria(4000000, 1000))
+            RANSACConvergenceCriteria(400000000, 5000))
     return result
+
 
 def refine_registration(source, target, source_fpfh, target_fpfh, voxel_size, result_ransac):
     distance_threshold = voxel_size * 0.4
@@ -77,11 +77,6 @@ def refine_registration(source, target, source_fpfh, target_fpfh, voxel_size, re
             TransformationEstimationPointToPlane())
     return result
 
-
-
-
-
-    
     
 def align_pcd(source, target):
     """
@@ -91,7 +86,7 @@ def align_pcd(source, target):
     :return: aligned_pcd: aligned point cloud
     """  
     
-    threshold = 0.002
+    threshold = 0.02
     
     trans_init = np.asarray(
                 [[0.862, 0.011, -0.507,  0.5],
@@ -135,8 +130,6 @@ def align_pcd(source, target):
     return
 
 
-
-
 def refine_pcd(rc_pcd, gt_pcd):
     """
 
@@ -155,7 +148,6 @@ def evaluate_pcd(rc_pcd, gt_pcd):
     :param gt_pcd: ground truth point cloud
     :return:
     """
-
 
 
 def evaluate_cameras(cams, gt_cams):

@@ -694,12 +694,12 @@ class Pipeline:
 
     def evaluate(self):
         # align_pcd(rc_pcd, gt_pcd)
-        pcd = scale_pcd(self.pcd, 10)
+        pcd = scale_pcd(self.pcd, 11)
         source = get_pcd(pcd)
         gt_points = get_gt_points(os.path.join(self.images_dir, '../Statue-model.obj'))
         target = get_pcd(gt_points)
 
-        voxel_size = 0.05 # means 5cm for the dataset
+        voxel_size = 0.25 # means 5cm for the dataset
         source, target, source_down, target_down, source_fpfh, target_fpfh = \
             prepare_dataset(voxel_size, source, target)
 
