@@ -12,13 +12,16 @@ def scale_pcd(pcd, s):
     return pcd * s
 
 
-def draw_registration_result(source, target, transformation):
+def draw_registration_result(source, target, transformation, rotate=True):
     source_temp = copy.deepcopy(source)
     target_temp = copy.deepcopy(target)
     source_temp.paint_uniform_color([1, 0.706, 0])
     target_temp.paint_uniform_color([0, 0.651, 0.929])
     source_temp.transform(transformation)
-    draw_geometries_with_animation_callback([source_temp, target_temp], rotate_view)
+    if rotate:
+        draw_geometries_with_animation_callback([source_temp, target_temp], rotate_view)
+    else:
+        draw_geometries([source_temp, target_temp])
 
 
 def preprocess_point_cloud(pcd, voxel_size):
@@ -28,12 +31,14 @@ def preprocess_point_cloud(pcd, voxel_size):
     radius_normal = voxel_size * 2
     print(":: Estimate normal with search radius %.3f." % radius_normal)
     estimate_normals(pcd_down, KDTreeSearchParamHybrid(
-            radius = radius_normal, max_nn = 30))
+        radius=radius_normal, max_nn=30))
 
     radius_feature = voxel_size * 5
     print(":: Compute FPFH feature with search radius %.3f." % radius_feature)
     pcd_fpfh = compute_fpfh_feature(pcd_down,
-            KDTreeSearchParamHybrid(radius = radius_feature, max_nn = 100))
+                                    KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
+
+
     return pcd_down, pcd_fpfh
 
 
@@ -44,7 +49,6 @@ def prepare_dataset(voxel_size, source, target):
                             [0.0, 1.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 1.0]])
     source.transform(trans_init)
-    #draw_registration_result(source, target, np.identity(4))
 
     source_down, source_fpfh = preprocess_point_cloud(source, voxel_size)
     target_down, target_fpfh = preprocess_point_cloud(target, voxel_size)
@@ -62,7 +66,7 @@ def execute_global_registration(source_down, target_down, source_fpfh, target_fp
             TransformationEstimationPointToPoint(False), 4,
             [CorrespondenceCheckerBasedOnEdgeLength(0.9),
             CorrespondenceCheckerBasedOnDistance(distance_threshold)],
-            RANSACConvergenceCriteria(40000000, 5000))
+            RANSACConvergenceCriteria(400000000, 5000))
     return result
 
 
@@ -127,36 +131,3 @@ def align_pcd(source, target):
     draw_registration_result(source, target, reg_p2l.transformation)
     
     return
-
-
-def refine_pcd(rc_pcd, gt_pcd):
-    """
-
-    :param rc_pcd: reconstructed point cloud
-    :param gt_pcd: ground truth point cloud
-    :return: ref_pcd: refined point cloud
-    """
-    ref_pcd = None
-    return ref_pcd
-
-
-def evaluate_pcd(rc_pcd, gt_pcd):
-    """
-
-    :param rc_pcd: reconstructed point cloud
-    :param gt_pcd: ground truth point cloud
-    :return:
-    """
-
-
-def evaluate_cameras(cams, gt_cams):
-    """
-
-    :param cams:
-    :param gt_cams:
-    :return:
-    """
-    #raise NotImplementedError
-
-
-

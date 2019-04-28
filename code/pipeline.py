@@ -20,12 +20,13 @@ import numpy as np
 import networkx as nx
 from scipy.optimize import leastsq
 import open3d
+import copy
 
 from feature_extraction import get_human_readable_exif, populate_keypoints_and_descriptors, deserialize_keypoints
 from feature_matching import serialize_matches, deserialize_matches
 from geometric_verification import draw_epipolar, get_K_from_exif, visualize_pcd, visualize_gv,\
                                     get_best_configuration, F_matrix_residuals, compute_F_matrix_residual, findPointCloud
-from reconstruction import get_camera_pose, get_angle, rotate_view, get_pcd, get_gt_points
+from reconstruction import get_camera_pose, get_angle, rotate_view, get_pcd, get_gt_points, get_gt_cams
 from evaluation import draw_registration_result, align_pcd,\
                         preprocess_point_cloud, prepare_dataset,\
                         execute_global_registration, refine_registration, scale_pcd
@@ -625,7 +626,7 @@ class Pipeline:
             return
 
         K1 = get_K_from_exif(self.exif_data[i])
-        # solve for camera positions in 3D space TODO maybe refine later
+        # solve for camera positions in 3D space
         R1, t1 = get_camera_pose(i_pts2d, pts3d, K1)
         i_cam_pt3d = R1.T @ t1
         self.camera3Dpose[i] = R1, t1
@@ -669,7 +670,6 @@ class Pipeline:
         num_points_end = self.pcd.shape[0]
 
         self.num_points_added_last_itr = num_points_end - num_points_start
-        # TODO remap every image's observed tracks with the new added pts
 
         self.unregistered_imgs.remove(i)  # finally, remove this image from the set of unregistered images
 
@@ -686,12 +686,15 @@ class Pipeline:
         # self.visualize_matches(self.init_i, self.init_j)
         # self.visualize_matches(self.init_i, self.init_j, self.gv_masks[self.init_i, self.init_j])
 
-    def _evaluate_pcd(self):
+    def evaluate(self):
         # Statue: 11, EmpireVase: 0.6
         scale = 11
         pcd = scale_pcd(self.pcd, scale)
         source = get_pcd(pcd)
         gt_points = get_gt_points(os.path.join(self.images_dir, '../Statue-model.obj'))
+        gt_Rs, gt_ts = get_gt_cams(os.path.join(self.images_dir, '../Statue-cameras.txt'))
+        R = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])
+        gt_ts = (gt_ts @ R)
         target = get_pcd(gt_points)
 
         # Statue: 0.25, EmpireVase: 0.02
@@ -707,10 +710,16 @@ class Pipeline:
         print(result_icp)
         draw_registration_result(source, target, result_icp.transformation)
 
-        import copy
-        source_temp = copy.deepcopy(source)
-        source_temp.transform(result_icp.transformation)
-        transformed_pts = np.array(source_temp.points)
+        trans_init = np.asarray([[0.0, 0.0, 1.0, 0.0],
+                                 [1.0, 0.0, 0.0, 0.0],
+                                 [0.0, 1.0, 0.0, 0.0],
+                                 [0.0, 0.0, 0.0, 1.0]])
+
+        # evaluate point cloud
+        obj_source = get_pcd(pcd)
+        obj_source.transform(trans_init)
+        obj_source.transform(result_icp.transformation)
+        transformed_pts = np.array(obj_source.points)
 
         matcher = cv2.BFMatcher(cv2.NORM_L2)
         des1 = transformed_pts.astype(np.float32)
@@ -721,14 +730,28 @@ class Pipeline:
         print('Point Cloud Evaluation')
         print('mean dist: ', (np.sum(dists) / len(des1)))
         print('stdev: ', np.std(dists))
-        print('num rc pts: ', transformed_pts.shape[0])
+        print('num reconstructed pts: ', transformed_pts.shape[0])
 
-    def _evaluate_cams(self):
-        raise NotImplementedError
+        cam_pcd = np.array([-pose[0].T @ pose[1] for pose in self.camera3Dpose if
+                            pose is not None]).squeeze()
+        cam_pcd = scale_pcd(cam_pcd, scale)
 
-    def evaluate(self):
-        self._evaluate_pcd()
-        self._evaluate_cams()
+        # evaluate camera extrinsics
+        cam_source = get_pcd(cam_pcd)
+        cam_source.transform(trans_init)
+        cam_source.transform(result_icp.transformation)
+        transformed_pts = np.array(cam_source.points)
+
+        matcher = cv2.BFMatcher(cv2.NORM_L2)
+        des1 = transformed_pts.astype(np.float32)
+        des2 = gt_ts.astype(np.float32)
+        matches = matcher.match(des1, des2)
+
+        dists = np.array([match.distance for match in matches])
+        print('Camera Extrinsics Evaluation')
+        print('mean dist: ', (np.sum(dists) / len(des1)))
+        print('stdev: ', np.std(dists))
+        print('num reconstructed cameras: ', transformed_pts.shape[0])
 
 
 if __name__ == '__main__':

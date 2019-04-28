@@ -8,6 +8,7 @@ import open3d
 import time
 import scipy
 from scipy.optimize import leastsq
+import quaternion
 
 from feature_extraction import get_human_readable_exif
 
@@ -58,7 +59,36 @@ def get_pcd(points):
     return pcd
 
 
-def get_gt_points(obj_filename):
+def get_gt_cams(filename):
+    """
+    Function for returning the ground truth camera extrinsics
+
+    :param filename: filename for .txt file
+    :return: ground truth Rs and ts
+    """
+
+    if '.txt' not in filename:
+        raise RuntimeError('Invalid file extension')
+
+    Rs = []
+    ts = []
+
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+
+        for i in range(0, len(lines), 4):
+            qw, qx, qy, qz = np.array(lines[i + 2].split()).astype(float)
+            q = quaternion.as_quat_array([qw, qx, qy, qz])
+
+            R = quaternion.as_rotation_matrix(q)
+            R /= R[2, 2]
+            t = np.array(lines[i+1].split()).astype(float)
+            Rs.append(R)
+            ts.append(t)
+    return np.array(Rs), np.array(ts)
+
+
+def get_gt_points(filename):
     """
     Function for returning the ground truth point cloud
 
@@ -66,9 +96,14 @@ def get_gt_points(obj_filename):
     :return: ground truth point cloud points as array
     """
 
+    if '.obj' not in filename:
+        raise RuntimeError('Invalid file extension')
+
     x, y, z = [], [], []
-    with open(obj_filename, 'r') as f:
-        for line in f.readlines():
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+
+        for line in lines:
             vals = line.split()
             if len(vals) is 4:
                 t, x_i, y_i, z_i = vals
