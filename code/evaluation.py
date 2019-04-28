@@ -4,6 +4,7 @@ File containing all the evaluation functions for the SfM Pipeline
 from open3d import *
 import numpy as np
 import copy
+from reconstruction import rotate_view
 import math
 
 
@@ -17,7 +18,7 @@ def draw_registration_result(source, target, transformation):
     source_temp.paint_uniform_color([1, 0.706, 0])
     target_temp.paint_uniform_color([0, 0.651, 0.929])
     source_temp.transform(transformation)
-    draw_geometries([source_temp, target_temp])
+    draw_geometries_with_animation_callback([source_temp, target_temp], rotate_view)
 
 
 def preprocess_point_cloud(pcd, voxel_size):
@@ -38,8 +39,6 @@ def preprocess_point_cloud(pcd, voxel_size):
 
 def prepare_dataset(voxel_size, source, target):
     print(":: Load two point clouds and disturb initial pose.")
-    # source = read_point_cloud("../../TestData/ICP/cloud_bin_0.pcd")
-    # target = read_point_cloud("../../TestData/ICP/cloud_bin_1.pcd")
     trans_init = np.asarray([[0.0, 0.0, 1.0, 0.0],
                             [1.0, 0.0, 0.0, 0.0],
                             [0.0, 1.0, 0.0, 0.0],
@@ -63,7 +62,7 @@ def execute_global_registration(source_down, target_down, source_fpfh, target_fp
             TransformationEstimationPointToPoint(False), 4,
             [CorrespondenceCheckerBasedOnEdgeLength(0.9),
             CorrespondenceCheckerBasedOnDistance(distance_threshold)],
-            RANSACConvergenceCriteria(400000000, 5000))
+            RANSACConvergenceCriteria(40000000, 5000))
     return result
 
 
@@ -74,7 +73,7 @@ def refine_registration(source, target, source_fpfh, target_fpfh, voxel_size, re
     print("   distance threshold %.3f." % distance_threshold)
     result = registration_icp(source, target, distance_threshold,
             result_ransac.transformation,
-            TransformationEstimationPointToPlane())
+            TransformationEstimationPointToPoint())
     return result
 
     
@@ -118,14 +117,14 @@ def align_pcd(source, target):
     draw_registration_result(source, target, reg_p2p.transformation)
 
     
-    # print("Apply point-to-plane ICP")
-    # reg_p2l = registration_icp(source, target, threshold, trans_init,
-    #         TransformationEstimationPointToPlane())
-    # print(reg_p2l)
-    # print("Transformation is:")
-    # print(reg_p2l.transformation)
-    # print("")
-    # draw_registration_result(source, target, reg_p2l.transformation)
+    print("Apply point-to-plane ICP")
+    reg_p2l = registration_icp(source, target, threshold, trans_init,
+            TransformationEstimationPointToPoint())
+    print(reg_p2l)
+    print("Transformation is:")
+    print(reg_p2l.transformation)
+    print("")
+    draw_registration_result(source, target, reg_p2l.transformation)
     
     return
 

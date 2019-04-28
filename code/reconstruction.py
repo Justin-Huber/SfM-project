@@ -21,7 +21,7 @@ def rotate_view(vis):
 
 def get_camera_pose(pts2d, pts3d, K):
     # TODO fix threshold, currently hardcoded
-    _, rvec, tvec, _ = cv2.solvePnPRansac(np.array(pts3d), np.array(pts2d), cameraMatrix=K, distCoeffs=np.zeros((4, 1)), reprojectionError=0.004*1980)
+    _, rvec, tvec, _ = cv2.solvePnPRansac(np.array(pts3d), np.array(pts2d), cameraMatrix=K, distCoeffs=np.zeros((5, 1)), reprojectionError=0.004*1980)
     rotM = cv2.Rodrigues(rvec)[0]
     return rotM, tvec
 

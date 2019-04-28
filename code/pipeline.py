@@ -479,7 +479,8 @@ class Pipeline:
             rc_pcd.paint_uniform_color([0, 0, 1])
 
             cams3dpose = np.array([-pose[0].T @ pose[1] for pose in self.camera3Dpose if
-                                   pose is not None]).squeeze()
+                                   pose is not None and pose]).squeeze()
+            cams3dpose = [cam3dpt for cam3dpt in cams3dpose if np.linalg.norm(cam3dpt) < 10]
             cam_pcd = open3d.PointCloud()
             cam_pcd.points = open3d.Vector3dVector(cams3dpose)
             cam_pcd.paint_uniform_color([1, 0, 0])
@@ -511,13 +512,6 @@ class Pipeline:
             cam_pcd2.paint_uniform_color([1, 0.706, 0])
             open3d.draw_geometries([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
             #open3d.draw_geometries_with_animation_callback([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd], rotate_view)
-
-            # vis = open3d.Visualizer()
-            # vis.create_window()
-            # vis.draw_geometry([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
-            # vis.register_animation_callback(rotate_view)
-            # vis.run()
-            # vis.destroy_window()
 
     def _get_track_kp_between_images(self, shared_tracks, i, j):
         pts1 = []
@@ -626,7 +620,7 @@ class Pipeline:
             i_pts2d.append(self.keypoints_and_descriptors[i][0][kp1].pt)
             pts3d.append(self.pcd[pt3d_idx])
 
-        if len(pts3d) < 4:  # need 4 points to use solvePnP
+        if len(pts3d) < 6:  # need 4 points to use solvePnP
             self.unregistered_imgs.remove(i)
             return
 
@@ -692,14 +686,16 @@ class Pipeline:
         # self.visualize_matches(self.init_i, self.init_j)
         # self.visualize_matches(self.init_i, self.init_j, self.gv_masks[self.init_i, self.init_j])
 
-    def evaluate(self):
-        # align_pcd(rc_pcd, gt_pcd)
-        pcd = scale_pcd(self.pcd, 11)
+    def _evaluate_pcd(self):
+        # Statue: 11, EmpireVase: 0.6
+        scale = 11
+        pcd = scale_pcd(self.pcd, scale)
         source = get_pcd(pcd)
         gt_points = get_gt_points(os.path.join(self.images_dir, '../Statue-model.obj'))
         target = get_pcd(gt_points)
 
-        voxel_size = 0.25 # means 5cm for the dataset
+        # Statue: 0.25, EmpireVase: 0.02
+        voxel_size = 0.25
         source, target, source_down, target_down, source_fpfh, target_fpfh = \
             prepare_dataset(voxel_size, source, target)
 
@@ -710,6 +706,29 @@ class Pipeline:
         result_icp = refine_registration(source, target, source_fpfh, target_fpfh, voxel_size, result_ransac)
         print(result_icp)
         draw_registration_result(source, target, result_icp.transformation)
+
+        import copy
+        source_temp = copy.deepcopy(source)
+        source_temp.transform(result_icp.transformation)
+        transformed_pts = np.array(source_temp.points)
+
+        matcher = cv2.BFMatcher(cv2.NORM_L2)
+        des1 = transformed_pts.astype(np.float32)
+        des2 = gt_points.astype(np.float32)[:262143]
+        matches = matcher.match(des1, des2)
+
+        dists = np.array([match.distance for match in matches])
+        print('Point Cloud Evaluation')
+        print('mean dist: ', (np.sum(dists) / len(des1)))
+        print('stdev: ', np.std(dists))
+        print('num rc pts: ', transformed_pts.shape[0])
+
+    def _evaluate_cams(self):
+        raise NotImplementedError
+
+    def evaluate(self):
+        self._evaluate_pcd()
+        self._evaluate_cams()
 
 
 if __name__ == '__main__':
