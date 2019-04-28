@@ -25,7 +25,10 @@ from feature_extraction import get_human_readable_exif, populate_keypoints_and_d
 from feature_matching import serialize_matches, deserialize_matches
 from geometric_verification import draw_epipolar, get_K_from_exif, visualize_pcd, visualize_gv,\
                                     get_best_configuration, F_matrix_residuals, compute_F_matrix_residual, findPointCloud
-from reconstruction import get_camera_pose, get_angle, rotate_view
+from reconstruction import get_camera_pose, get_angle, rotate_view, get_pcd, get_gt_points
+from evaluation import draw_registration_result, align_pcd,\
+                        preprocess_point_cloud, prepare_dataset,\
+                        execute_global_registration, refine_registration, scale_pcd
 
 FLANN = 0
 BF = 1
@@ -89,8 +92,8 @@ class Pipeline:
             self._geometric_verification()
             self._init_reconstruction()
             self._reconstruct3d()
-            # with open(pickled_pcd, 'wb') as f:
-            #    pickle.dump((self.pcd, self.camera3Dpose), f)
+            with open(pickled_pcd, 'wb') as f:
+               pickle.dump((self.pcd, self.camera3Dpose), f)
 
     def _load_images_impl(self):
         """
@@ -686,12 +689,27 @@ class Pipeline:
             #self.visualize_pcd()
             self._register_next_img()
 
-        self.visualize_matches(self.init_i, self.init_j)
-        self.visualize_matches(self.init_i, self.init_j, self.gv_masks[self.init_i, self.init_j])
+        # self.visualize_matches(self.init_i, self.init_j)
+        # self.visualize_matches(self.init_i, self.init_j, self.gv_masks[self.init_i, self.init_j])
 
     def evaluate(self):
-        self._geometric_verification_impl(self.init_i, self.init_j)
-        raise NotImplementedError
+        # align_pcd(rc_pcd, gt_pcd)
+        pcd = scale_pcd(self.pcd, 10)
+        source = get_pcd(pcd)
+        gt_points = get_gt_points(os.path.join(self.images_dir, '../Statue-model.obj'))
+        target = get_pcd(gt_points)
+
+        voxel_size = 0.05 # means 5cm for the dataset
+        source, target, source_down, target_down, source_fpfh, target_fpfh = \
+            prepare_dataset(voxel_size, source, target)
+
+        result_ransac = execute_global_registration(source_down, target_down, source_fpfh, target_fpfh, voxel_size)
+        print(result_ransac)
+        draw_registration_result(source_down, target_down, result_ransac.transformation)
+
+        result_icp = refine_registration(source, target, source_fpfh, target_fpfh, voxel_size, result_ransac)
+        print(result_icp)
+        draw_registration_result(source, target, result_icp.transformation)
 
 
 if __name__ == '__main__':
@@ -702,5 +720,5 @@ if __name__ == '__main__':
                             n_keypoints=8000, verbose=False,
                             n_jobs=-1, init_threshold=100)
         pipeline.run()
-        pipeline.visualize_pcd(final=True)
+        #pipeline.visualize_pcd(final=True)
         pipeline.evaluate()

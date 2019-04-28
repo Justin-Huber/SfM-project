@@ -4,6 +4,13 @@ File containing all the helper functions for 3D reconstruction
 
 import cv2
 import numpy as np
+import open3d
+import time
+import scipy
+from scipy.optimize import leastsq
+
+from feature_extraction import get_human_readable_exif
+
 
 
 def rotate_view(vis):
@@ -39,3 +46,41 @@ def get_angle(a, b, c):
     angle = np.arccos(cosine_angle)
 
     return np.degrees(angle)
+
+
+def get_pcd(points):
+    """
+    Get pcd from points
+    """
+    pcd = open3d.PointCloud()
+    pcd.points = open3d.Vector3dVector(points)
+    pcd.paint_uniform_color([0, 0, 1])
+    return pcd
+
+
+def get_gt_points(obj_filename):
+    """
+    Function for returning the ground truth point cloud
+
+    :param obj_filename: filename for .obj file
+    :return: ground truth point cloud points as array
+    """
+
+    x, y, z = [], [], []
+    with open(obj_filename, 'r') as f:
+        for line in f.readlines():
+            vals = line.split()
+            if len(vals) is 4:
+                t, x_i, y_i, z_i = vals
+
+                if t is 'v':
+                    x.append(x_i)
+                    y.append(y_i)
+                    z.append(z_i)
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+    z = np.asarray(z)
+
+    points = np.array([x, y, z])
+    return points.T
