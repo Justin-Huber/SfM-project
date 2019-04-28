@@ -163,11 +163,13 @@ def get_best_configuration(K1, K2, F, pts1, pts2):
 
     R1, R2, t = cv2.decomposeEssentialMat(E)
 
+    R_, t_ = np.diag(np.ones(R1.shape[1])), np.zeros(t.shape)
+
     X = np.array(([0], [0]))
 
     best_config = None
     for args in [[R1, t], [R1, -t], [R2, t], [R2, -t]]:
-        tmp = findPointCloud(K1, K2, *args, pts1, pts2)
+        tmp = findPointCloud(K1, K2, R_, t_, *args, pts1, pts2)
 
         if tmp.shape[1] > X.shape[1]:
             X = tmp
@@ -182,10 +184,11 @@ def visualize_gv_from_F(K1, K2, F, pts1, pts2):
     R1, R2, t = cv2.decomposeEssentialMat(E)
 
     X = np.array(([0], [0]))
+    R_, t_ = np.diag(np.ones(R1.shape[1])), np.zeros(t.shape)
 
     best_R, best_t = None, None
     for args in [[R1, t], [R1, -t], [R2, t], [R2, -t]]:
-        tmp = findPointCloud(K1, K2, *args, pts1, pts2)
+        tmp = findPointCloud(K1, K2, R_, t_, *args, pts1, pts2)
 
         if tmp.shape[1] > X.shape[1]:
             X = tmp

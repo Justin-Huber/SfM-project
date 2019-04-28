@@ -84,6 +84,8 @@ def populate_keypoints_and_descriptors(images, n_keypoints, n_jobs):
     :return: returns a list of serialized keypoints and descriptors where the
             index is the index of that image in the images list
     """
+
+    n_jobs = 1
     # Initiate SIFT detector
     # find the keypoints and descriptors with SIFT
     kps_and_des = Parallel(n_jobs=n_jobs, backend='threading')(delayed(pickleable_detect_and_compute)(img, n_keypoints)

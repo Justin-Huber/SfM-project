@@ -6,6 +6,12 @@ import cv2
 import numpy as np
 
 
+def rotate_view(vis):
+    ctr = vis.get_view_control()
+    ctr.rotate(10.0, 0.0)
+    return False
+
+
 def get_camera_pose(pts2d, pts3d, K):
     # TODO fix threshold, currently hardcoded
     _, rvec, tvec, _ = cv2.solvePnPRansac(np.array(pts3d), np.array(pts2d), cameraMatrix=K, distCoeffs=np.zeros((4, 1)), reprojectionError=0.004*1980)

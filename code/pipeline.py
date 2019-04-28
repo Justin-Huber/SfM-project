@@ -25,7 +25,7 @@ from feature_extraction import get_human_readable_exif, populate_keypoints_and_d
 from feature_matching import serialize_matches, deserialize_matches
 from geometric_verification import draw_epipolar, get_K_from_exif, visualize_pcd, visualize_gv,\
                                     get_best_configuration, F_matrix_residuals, compute_F_matrix_residual, findPointCloud
-from reconstruction import get_camera_pose, get_angle
+from reconstruction import get_camera_pose, get_angle, rotate_view
 
 FLANN = 0
 BF = 1
@@ -297,7 +297,7 @@ class Pipeline:
             inlier_pts2 = inlier_pts2.astype(int)
 
             # must have enough points to constrain the problem
-            if inlier_pts1.shape[0] >= 8 and inlier_pts2.shape[0] >= 8:
+            if inlier_pts1.shape[0] >= 8 and inlier_pts2.shape[0] >= 8 and F is not None:
                 # optimize F according to the inliers using Levenberg-Marquardt
                 F, _ = leastsq(func=F_matrix_residuals, x0=F.flatten()[:-1].reshape(-1, 1), args=(inlier_pts1, inlier_pts2))
                 F = np.append(F, 1).reshape(3, 3)
@@ -490,8 +490,15 @@ class Pipeline:
         cam_pcd2 = open3d.PointCloud()
         cam_pcd2.points = open3d.Vector3dVector([cams3dpose2])
         cam_pcd2.paint_uniform_color([1, 0.706, 0])
+        open3d.draw_geometries([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
+        open3d.draw_geometries_with_animation_callback([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd], rotate_view)
 
-        open3d.draw_geometries([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd], top=25, left=5)#, width=500, height=500)
+        # vis = open3d.Visualizer()
+        # vis.create_window()
+        # vis.draw_geometry([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
+        # vis.register_animation_callback(rotate_view)
+        # vis.run()
+        # vis.destroy_window()
 
     def _get_track_kp_between_images(self, shared_tracks, i, j):
         pts1 = []
@@ -576,9 +583,9 @@ class Pipeline:
         if self.verbose and input("Visualize initialization images? (y/n) ") == 'y':
             inliers_mask = self.gv_masks[i][j]
             self.visualize_matches(i, j, inliers_mask)
-        self.num_points_added_last_itr = self.pcd.shape[0]
-        self.last_cam_added = i
-        self.visualize_pcd()
+            self.num_points_added_last_itr = self.pcd.shape[0]
+            self.last_cam_added = i
+            self.visualize_pcd()
 
     def _register_next_img(self):
         """
@@ -614,11 +621,7 @@ class Pipeline:
         i_cam_pt3d = -np.matrix(R1).T * np.matrix(t1)
         self.camera3Dpose[i] = R1, t1
 
-        # self.pcd = np.append(self.pcd, np.array(pts3d), axis=0)
-        # self.num_points_added_last_itr = len(pts3d)
         self.last_cam_added = i
-        # self.visualize_pcd()
-
         for trackID in candidate_tracks:
             # add candidate tracks if they are observed by at least one registered camera
             # and if adding it produces a well-conditioned estimate of its location
@@ -628,7 +631,8 @@ class Pipeline:
 
             best_pt3d = None
             best_dos = 0
-            n_imgs = []
+            n_projs = [np.append(R1, t1, axis=1)]
+            n_pts = [pt1]
             for j, kp2 in trackDict.items():
                 i_node = i * self.n_keypoints + kp1
                 j_node = j * self.n_keypoints + kp2
@@ -636,9 +640,8 @@ class Pipeline:
                 if j not in self.unregistered_imgs and j_node in self.track_adj_list[i_node]:
                     K2 = get_K_from_exif(self.exif_data[j])
                     pair = tuple(sorted((i, j)))
-                    R2, t2 = self.im2im_configs[pair]
+                    R2, t2 = self.camera3Dpose[j]
                     pt2 = self.keypoints_and_descriptors[j][0][kp2].pt
-                    R1, t1 = np.diag(np.ones(R2.shape[1])), np.zeros(t2.shape)  # camera i is the origin of this coordinate system
                     pt3d = findPointCloud(K1, K2, R1, t1, R2, t2, np.array([pt1]), np.array([pt2]))
 
                     if pt3d.size > 0:
@@ -650,10 +653,9 @@ class Pipeline:
                         if dos > best_dos:
                             best_pt3d = pt3d.reshape(1, -1)
                             best_dos = dos
-                            best_img = j
 
             # add best triangulation
-            if best_img != -1 and best_dos > self.dos_threshold:
+            if best_dos > self.dos_threshold:
                 self.pcd = np.append(self.pcd, best_pt3d, axis=0)
                 self.track2pcd[trackID] = self.pcd.shape[0] - 1  # maps to point we just added
                 self._register_tracks([trackID])
@@ -671,7 +673,7 @@ class Pipeline:
     def _reconstruct3d(self):
         while self.unregistered_imgs != set():
             self._register_next_img()
-            self.visualize_pcd()
+            #self.visualize_pcd()
 
         self.visualize_pcd()
 
