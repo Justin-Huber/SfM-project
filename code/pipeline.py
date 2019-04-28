@@ -79,12 +79,18 @@ class Pipeline:
             os.mkdir(self.reconstruction_dir)
 
     def run(self):
-        self._extract_features()  # extract features using ORB
-        self._match_features()  # match features using FLANN
-        self._geometric_verification()
-        self._init_reconstruction()
-        self._reconstruct3d()
-        raise NotImplementedError
+        pickled_pcd = os.path.join(self.reconstruction_dir, 'pcd.pkl')
+        if os.path.exists(pickled_pcd):
+            with open(pickled_pcd, 'rb') as f:
+                self.pcd, self.camera3Dpose = pickle.load(f)
+        else:
+            self._extract_features()  # extract features using ORB
+            self._match_features()  # match features using FLANN
+            self._geometric_verification()
+            self._init_reconstruction()
+            self._reconstruct3d()
+            with open(pickled_pcd, 'wb') as f:
+                pickle.dump((self.pcd, self.camera3Dpose), f)
 
     def _load_images_impl(self):
         """
@@ -470,35 +476,49 @@ class Pipeline:
         img = cv2.drawKeypoints(self.images[i], kps, None)
         plt.imshow(img), plt.show(block=False), plt.pause(0.001)
 
-    def visualize_pcd(self):
-        pcd = self.pcd[:-(self.num_points_added_last_itr + 1)]
-        rc_pcd = open3d.PointCloud()
-        rc_pcd.points = open3d.Vector3dVector(pcd)
-        rc_pcd.paint_uniform_color([0, 0, 1])
+    def visualize_pcd(self, final=False):
+        if final:
+            pcd = self.pcd
+            rc_pcd = open3d.PointCloud()
+            rc_pcd.points = open3d.Vector3dVector(pcd)
+            rc_pcd.paint_uniform_color([0, 0, 1])
 
-        pcd2 = self.pcd[-self.num_points_added_last_itr:]
-        rc2_pcd = open3d.PointCloud()
-        rc2_pcd.points = open3d.Vector3dVector(pcd2)
-        rc2_pcd.paint_uniform_color([0, 1, 0])
+            cams3dpose = np.array([-np.matrix(pose[0]).T * np.matrix(pose[1]) for pose in self.camera3Dpose if
+                                   pose is not None]).squeeze()
+            cam_pcd = open3d.PointCloud()
+            cam_pcd.points = open3d.Vector3dVector(cams3dpose)
+            cam_pcd.paint_uniform_color([1, 0, 0])
 
-        cams3dpose = np.array([-np.matrix(pose[0]).T * np.matrix(pose[1]) for pose in self.camera3Dpose if pose is not None]).squeeze()
-        cam_pcd = open3d.PointCloud()
-        cam_pcd.points = open3d.Vector3dVector(cams3dpose)
-        cam_pcd.paint_uniform_color([1, 0, 0])
+            open3d.draw_geometries([rc_pcd, cam_pcd])
+        else:
+            pcd = self.pcd[:-(self.num_points_added_last_itr + 1)]
+            rc_pcd = open3d.PointCloud()
+            rc_pcd.points = open3d.Vector3dVector(pcd)
+            rc_pcd.paint_uniform_color([0, 0, 1])
 
-        cams3dpose2 = np.array(-np.matrix(self.camera3Dpose[self.last_cam_added][0]).T * np.matrix(self.camera3Dpose[self.last_cam_added][1])).squeeze()
-        cam_pcd2 = open3d.PointCloud()
-        cam_pcd2.points = open3d.Vector3dVector([cams3dpose2])
-        cam_pcd2.paint_uniform_color([1, 0.706, 0])
-        open3d.draw_geometries([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
-        open3d.draw_geometries_with_animation_callback([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd], rotate_view)
+            pcd2 = self.pcd[-self.num_points_added_last_itr:]
+            rc2_pcd = open3d.PointCloud()
+            rc2_pcd.points = open3d.Vector3dVector(pcd2)
+            rc2_pcd.paint_uniform_color([0, 1, 0])
 
-        # vis = open3d.Visualizer()
-        # vis.create_window()
-        # vis.draw_geometry([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
-        # vis.register_animation_callback(rotate_view)
-        # vis.run()
-        # vis.destroy_window()
+            cams3dpose = np.array([-np.matrix(pose[0]).T * np.matrix(pose[1]) for pose in self.camera3Dpose if pose is not None]).squeeze()
+            cam_pcd = open3d.PointCloud()
+            cam_pcd.points = open3d.Vector3dVector(cams3dpose)
+            cam_pcd.paint_uniform_color([1, 0, 0])
+
+            cams3dpose2 = np.array(-np.matrix(self.camera3Dpose[self.last_cam_added][0]).T * np.matrix(self.camera3Dpose[self.last_cam_added][1])).squeeze()
+            cam_pcd2 = open3d.PointCloud()
+            cam_pcd2.points = open3d.Vector3dVector([cams3dpose2])
+            cam_pcd2.paint_uniform_color([1, 0.706, 0])
+            open3d.draw_geometries([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
+            #open3d.draw_geometries_with_animation_callback([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd], rotate_view)
+
+            # vis = open3d.Visualizer()
+            # vis.create_window()
+            # vis.draw_geometry([rc_pcd, rc2_pcd, cam_pcd2, cam_pcd])
+            # vis.register_animation_callback(rotate_view)
+            # vis.run()
+            # vis.destroy_window()
 
     def _get_track_kp_between_images(self, shared_tracks, i, j):
         pts1 = []
@@ -583,9 +603,9 @@ class Pipeline:
         if self.verbose and input("Visualize initialization images? (y/n) ") == 'y':
             inliers_mask = self.gv_masks[i][j]
             self.visualize_matches(i, j, inliers_mask)
-            self.num_points_added_last_itr = self.pcd.shape[0]
-            self.last_cam_added = i
-            self.visualize_pcd()
+        self.num_points_added_last_itr = self.pcd.shape[0]
+        self.last_cam_added = i
+        self.visualize_pcd()
 
     def _register_next_img(self):
         """
@@ -618,7 +638,7 @@ class Pipeline:
         K1 = get_K_from_exif(self.exif_data[i])
         # solve for camera positions in 3D space TODO maybe refine later
         R1, t1 = get_camera_pose(i_pts2d, pts3d, K1)
-        i_cam_pt3d = -np.matrix(R1).T * np.matrix(t1)
+        i_cam_pt3d = -R1.T @ t1
         self.camera3Dpose[i] = R1, t1
 
         self.last_cam_added = i
@@ -631,22 +651,19 @@ class Pipeline:
 
             best_pt3d = None
             best_dos = 0
-            n_projs = [np.append(R1, t1, axis=1)]
-            n_pts = [pt1]
             for j, kp2 in trackDict.items():
                 i_node = i * self.n_keypoints + kp1
                 j_node = j * self.n_keypoints + kp2
                 # if j is registered and is adjacent to i
                 if j not in self.unregistered_imgs and j_node in self.track_adj_list[i_node]:
                     K2 = get_K_from_exif(self.exif_data[j])
-                    pair = tuple(sorted((i, j)))
                     R2, t2 = self.camera3Dpose[j]
                     pt2 = self.keypoints_and_descriptors[j][0][kp2].pt
                     pt3d = findPointCloud(K1, K2, R1, t1, R2, t2, np.array([pt1]), np.array([pt2]))
 
                     if pt3d.size > 0:
                         rotM, tvec = self.camera3Dpose[j]
-                        j_cam_pt3d = -np.matrix(rotM).T * np.matrix(tvec)
+                        j_cam_pt3d = -rotM.T @ tvec
 
                         dos = get_angle(np.array(i_cam_pt3d), np.array(pt3d), np.array(j_cam_pt3d))
 
@@ -675,18 +692,17 @@ class Pipeline:
             self._register_next_img()
             #self.visualize_pcd()
 
-        self.visualize_pcd()
-
     def evaluate(self):
         raise NotImplementedError
 
 
 if __name__ == '__main__':
-    with warnings.catch_warnings():  # TODO how to not display dep warnings?
+    with warnings.catch_warnings():  # TODO how to not display deprecation warnings?
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         pipeline = Pipeline('../datasets/Statue/images/',
                             n_keypoints=8000, verbose=False,
                             n_jobs=-1, init_threshold=100)
         pipeline.run()
+        pipeline.visualize_pcd(final=True)
         pipeline.evaluate()
