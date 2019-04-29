@@ -486,7 +486,8 @@ class Pipeline:
             cam_pcd.points = open3d.Vector3dVector(cams3dpose)
             cam_pcd.paint_uniform_color([1, 0, 0])
 
-            open3d.draw_geometries([rc_pcd, cam_pcd])
+            # open3d.draw_geometries([rc_pcd, cam_pcd])
+            open3d.draw_geometries_with_animation_callback([rc_pcd, cam_pcd], rotate_view)
         else:
             pcd = self.pcd[:-(self.num_points_added_last_itr + 1)]
             rc_pcd = open3d.PointCloud()
@@ -621,7 +622,7 @@ class Pipeline:
             i_pts2d.append(self.keypoints_and_descriptors[i][0][kp1].pt)
             pts3d.append(self.pcd[pt3d_idx])
 
-        if len(pts3d) < 6:  # need 4 points to use solvePnP
+        if len(pts3d) < 4:  # need 4 points to use solvePnP
             self.unregistered_imgs.remove(i)
             return
 
@@ -688,7 +689,7 @@ class Pipeline:
 
     def evaluate(self):
         # Statue: 11, EmpireVase: 0.6
-        scale = 11
+        scale = 0.6
         pcd = scale_pcd(self.pcd, scale)
         source = get_pcd(pcd)
         gt_points = get_gt_points(os.path.join(self.images_dir, '../Statue-model.obj'))
@@ -698,7 +699,7 @@ class Pipeline:
         target = get_pcd(gt_points)
 
         # Statue: 0.25, EmpireVase: 0.02
-        voxel_size = 0.25
+        voxel_size = 0.02
         source, target, source_down, target_down, source_fpfh, target_fpfh = \
             prepare_dataset(voxel_size, source, target)
 
@@ -762,5 +763,5 @@ if __name__ == '__main__':
                             n_keypoints=8000, verbose=False,
                             n_jobs=-1, init_threshold=100)
         pipeline.run()
-        #pipeline.visualize_pcd(final=True)
+        pipeline.visualize_pcd(final=True)
         pipeline.evaluate()
